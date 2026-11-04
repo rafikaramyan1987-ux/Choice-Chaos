@@ -1,5 +1,8 @@
 {
-  "meta": { "name": "English", "code": "en" },
+  "meta": {
+    "name": "English",
+    "code": "en"
+  },
   "ui": {
     "title": "Cozy Café",
     "tagline": "Warm drinks, sweet treats, happy guests",
@@ -25,7 +28,6 @@
     "decor": "Decor",
     "owned": "Owned",
     "unlockFree": "Unlock now",
-    "fromDay": "Day {n}",
     "maxLevel": "Max",
     "level": "Level {n}",
     "faster": "Faster",
@@ -48,12 +50,13 @@
     "watchAd": "Watch a short video"
   },
   "recipes": {
+    "coffee": "Fresh coffee",
     "latte": "Cloud latte",
     "croissant": "Warm croissant",
     "juice": "Sunny orange juice",
     "toastie": "Ham & cheese toastie",
     "cocoa": "Marshmallow cocoa",
-    "crepe_choco": "Choco-banana crepe",
+    "crepe_choco": "Chocolate crepe",
     "cone": "Sprinkle cone",
     "veggie": "Garden toastie",
     "cake": "Cherry cream cake",
@@ -63,17 +66,54 @@
     "smoothie_mango": "Mango sunrise"
   },
   "ingredients": {
-    "cup": "Mug", "glass": "Glass", "coffee": "Coffee", "milk": "Milk", "foam": "Milk foam", "cocoa": "Cocoa",
-    "marshmallow": "Marshmallows", "orange": "Orange juice", "ice": "Ice", "berries": "Berries", "banana": "Banana",
-    "yogurt": "Yogurt", "mango": "Mango", "blend": "Blender", "bread": "Bread", "ham": "Ham", "cheese": "Cheese",
-    "tomato": "Tomato", "lettuce": "Lettuce", "toast": "Toaster press", "batter": "Batter", "cook": "Griddle",
-    "choco": "Chocolate sauce", "plate": "Plate", "croissant": "Croissant", "warm": "Oven", "cake": "Cake",
-    "cream": "Whipped cream", "cherry": "Cherry", "cone": "Cone", "bowl": "Bowl", "vanilla": "Vanilla scoop",
-    "strawberry": "Strawberry scoop", "sprinkles": "Sprinkles"
+    "cup": "Mug",
+    "glass": "Glass",
+    "coffee": "Coffee",
+    "milk": "Milk",
+    "foam": "Milk foam",
+    "cocoa": "Cocoa",
+    "marshmallow": "Marshmallows",
+    "orange": "Orange juice",
+    "ice": "Ice",
+    "berries": "Berries",
+    "banana": "Banana",
+    "yogurt": "Yogurt",
+    "mango": "Mango",
+    "blend": "Blender",
+    "bread": "Bread",
+    "ham": "Ham",
+    "cheese": "Cheese",
+    "tomato": "Tomato",
+    "lettuce": "Lettuce",
+    "toast": "Toaster press",
+    "batter": "Batter",
+    "cook": "Griddle",
+    "choco": "Chocolate sauce",
+    "plate": "Plate",
+    "croissant": "Croissant",
+    "warm": "Oven",
+    "cake": "Cake",
+    "cream": "Whipped cream",
+    "cherry": "Cherry",
+    "cone": "Cone",
+    "bowl": "Bowl",
+    "vanilla": "Vanilla scoop",
+    "strawberry": "Strawberry scoop",
+    "sprinkles": "Sprinkles",
+    "sugar": "Sugar"
   },
-  "machines": { "coffee": "Coffee machine", "oven": "Oven & griddle", "blender": "Blender" },
+  "machines": {
+    "coffee": "Coffee machine",
+    "oven": "Oven & griddle",
+    "blender": "Blender"
+  },
   "decor": {
-    "plant": "Big plant", "flowers": "Flower vase", "lights": "String lights", "painting": "Painting",
-    "clock": "Wall clock", "shelf": "Cozy shelf", "cat": "Café cat"
+    "plant": "Big plant",
+    "flowers": "Flower vase",
+    "lights": "String lights",
+    "painting": "Painting",
+    "clock": "Wall clock",
+    "shelf": "Cozy shelf",
+    "cat": "Café cat"
   }
 }

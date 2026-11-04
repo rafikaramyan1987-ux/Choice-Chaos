@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Cozy Café — a relaxing mobile-first café cooking game.",
+  "description": "Cozy Caf\u00e9 \u2014 a relaxing mobile-first caf\u00e9 cooking game.",
   "license": "UNLICENSED",
   "scripts": {
     "dev": "vite",
@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "check": "npm run lint && npm run typecheck && npm run test"
+    "check": "npm run lint && npm run typecheck && npm run test",
+    "covers": "node scripts/covers.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

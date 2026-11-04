@@ -1,5 +1,8 @@
 {
-  "meta": { "name": "Français", "code": "fr" },
+  "meta": {
+    "name": "Français",
+    "code": "fr"
+  },
   "ui": {
     "title": "Cozy Café",
     "tagline": "Boissons chaudes, douceurs et clients ravis",
@@ -25,7 +28,6 @@
     "decor": "Déco",
     "owned": "Acquis",
     "unlockFree": "Débloquer",
-    "fromDay": "Jour {n}",
     "maxLevel": "Max",
     "level": "Niveau {n}",
     "faster": "Plus rapide",
@@ -48,12 +50,13 @@
     "watchAd": "Regarder une courte vidéo"
   },
   "recipes": {
+    "coffee": "Petit café",
     "latte": "Latte nuage",
     "croissant": "Croissant tiède",
     "juice": "Jus d'orange soleil",
     "toastie": "Croque jambon-fromage",
     "cocoa": "Chocolat chaud guimauve",
-    "crepe_choco": "Crêpe choco-banane",
+    "crepe_choco": "Crêpe chocolat",
     "cone": "Cornet à paillettes",
     "veggie": "Croque du jardin",
     "cake": "Gâteau crème-cerise",
@@ -63,17 +66,54 @@
     "smoothie_mango": "Lever de mangue"
   },
   "ingredients": {
-    "cup": "Tasse", "glass": "Verre", "coffee": "Café", "milk": "Lait", "foam": "Mousse de lait", "cocoa": "Cacao",
-    "marshmallow": "Guimauves", "orange": "Jus d'orange", "ice": "Glaçons", "berries": "Baies", "banana": "Banane",
-    "yogurt": "Yaourt", "mango": "Mangue", "blend": "Mixeur", "bread": "Pain", "ham": "Jambon", "cheese": "Fromage",
-    "tomato": "Tomate", "lettuce": "Salade", "toast": "Presse à croque", "batter": "Pâte", "cook": "Crêpière",
-    "choco": "Sauce chocolat", "plate": "Assiette", "croissant": "Croissant", "warm": "Four", "cake": "Gâteau",
-    "cream": "Chantilly", "cherry": "Cerise", "cone": "Cornet", "bowl": "Coupe", "vanilla": "Boule vanille",
-    "strawberry": "Boule fraise", "sprinkles": "Paillettes"
+    "cup": "Tasse",
+    "glass": "Verre",
+    "coffee": "Café",
+    "milk": "Lait",
+    "foam": "Mousse de lait",
+    "cocoa": "Cacao",
+    "marshmallow": "Guimauves",
+    "orange": "Jus d'orange",
+    "ice": "Glaçons",
+    "berries": "Baies",
+    "banana": "Banane",
+    "yogurt": "Yaourt",
+    "mango": "Mangue",
+    "blend": "Mixeur",
+    "bread": "Pain",
+    "ham": "Jambon",
+    "cheese": "Fromage",
+    "tomato": "Tomate",
+    "lettuce": "Salade",
+    "toast": "Presse à croque",
+    "batter": "Pâte",
+    "cook": "Crêpière",
+    "choco": "Sauce chocolat",
+    "plate": "Assiette",
+    "croissant": "Croissant",
+    "warm": "Four",
+    "cake": "Gâteau",
+    "cream": "Chantilly",
+    "cherry": "Cerise",
+    "cone": "Cornet",
+    "bowl": "Coupe",
+    "vanilla": "Boule vanille",
+    "strawberry": "Boule fraise",
+    "sprinkles": "Paillettes",
+    "sugar": "Sucre"
   },
-  "machines": { "coffee": "Machine à café", "oven": "Four & crêpière", "blender": "Mixeur" },
+  "machines": {
+    "coffee": "Machine à café",
+    "oven": "Four & crêpière",
+    "blender": "Mixeur"
+  },
   "decor": {
-    "plant": "Grande plante", "flowers": "Vase de fleurs", "lights": "Guirlande lumineuse", "painting": "Tableau",
-    "clock": "Horloge", "shelf": "Étagère douillette", "cat": "Chat du café"
+    "plant": "Grande plante",
+    "flowers": "Vase de fleurs",
+    "lights": "Guirlande lumineuse",
+    "painting": "Tableau",
+    "clock": "Horloge",
+    "shelf": "Étagère douillette",
+    "cat": "Chat du café"
   }
 }

@@ -4,6 +4,7 @@
  * sees the drink or dish grow while preparing it.
  */
 import { hashString, mulberry32 } from '../core/rng';
+import type { Size } from '../core/recipes';
 
 let uid = 0;
 const nextId = (p: string) => `${p}${++uid}`;
@@ -38,6 +39,8 @@ function mix(colors: string[]): string {
   return `#${rgb.map((v) => Math.round(v / colors.length).toString(16).padStart(2, '0')).join('')}`;
 }
 
+const NICE_DEFAULT = 0.58;
+
 // ------------------------------------------------------------------ shared parts
 
 const steam = (x: number, y: number) =>
@@ -68,34 +71,25 @@ const cakeSlice = (y: number) =>
   `<rect x="28" y="${y + 16}" width="44" height="4" fill="#e85d75" stroke="none"/>` +
   `<path d="M26 ${y + 7} q0 -7 8 -7 h32 q8 0 8 7 q-6 4 -12 0 q-6 4 -12 0 q-6 4 -12 0 q-6 4 -12 0 z" fill="#fff0f3"/></g>`;
 
-const breadSlice = (y: number, toasted: boolean, top = false) => {
-  const fill = toasted ? '#e09a45' : '#f5cd8c';
-  if (!top) return `<rect x="20" y="${y}" width="60" height="11" rx="5" fill="${fill}" ${ST}/>`;
-  const lines = toasted
-    ? [34, 46, 58].map((x) => `<path d="M${x} ${y - 13} l8 10" stroke="#9c5a22" stroke-width="3" stroke-linecap="round"/>`).join('')
-    : '';
-  return `<path d="M20 ${y} v-6 q0 -12 14 -12 h32 q14 0 14 12 v6 z" fill="${fill}" ${ST}/>${lines}`;
-};
-
 const scoop = (x: number, y: number, color: string, r = 15) =>
   `<g ${ST}><path d="M${x - r} ${y} a${r} ${r} 0 0 1 ${2 * r} 0 q-3 6 -7 2 q-4 6 -8 1 q-4 6 -8 0 q-4 5 -${r - 8} -3 z" fill="${color}"/></g>` +
   `<circle cx="${x - r / 3}" cy="${y - r / 2}" r="3" fill="#fff" opacity=".6"/>`;
 
 const SPRINKLE_COLORS = ['#ff6f91', '#5cc8ff', '#ffd23f', '#8be07a', '#b98cff'];
-const sprinkles = (x: number, y: number, spread = 12) =>
-  Array.from({ length: 9 }, (_, i) => {
+const sprinkles = (x: number, y: number, spread = 12, count = 9) =>
+  Array.from({ length: count }, (_, i) => {
     const a = (i * 137) % 360;
     const dx = Math.cos(a) * spread * ((i % 3) / 3 + 0.4);
     const dy = Math.sin(a) * spread * 0.5 - 2;
     return `<rect x="${(x + dx).toFixed(1)}" y="${(y + dy).toFixed(1)}" width="5" height="2" rx="1" fill="${SPRINKLE_COLORS[i % 5]}" transform="rotate(${a} ${(x + dx).toFixed(1)} ${(y + dy).toFixed(1)})"/>`;
   }).join('');
 
-const chocoDrizzle = (x1: number, x2: number, y: number) => {
+const chocoDrizzle = (x1: number, x2: number, y: number, amount = NICE_DEFAULT) => {
   let d = `M${x1} ${y}`;
   const n = 5;
   const w = (x2 - x1) / n;
   for (let i = 0; i < n; i++) d += ` q${w / 2} ${i % 2 ? -7 : 7} ${w} 0`;
-  return `<path d="${d}" fill="none" stroke="#5a3420" stroke-width="4.5" stroke-linecap="round"/>`;
+  return `<path d="${d}" fill="none" stroke="#5a3420" stroke-width="${(1.5 + amount * 7).toFixed(1)}" stroke-linecap="round"/>`;
 };
 
 const bananaSlice = (x: number, y: number) =>
@@ -108,7 +102,27 @@ const iceCube = (x: number, y: number, rot: number, size = 13) =>
 
 // ------------------------------------------------------------------ items
 
-function drawCupItem(steps: string[], vessel: 'cup' | 'glass', fresh: string | null): string {
+export interface ItemView {
+  steps: readonly string[];
+  /** Amount 0..1 of each step (pour level, topping amount, cooking time). Missing = a nice default. */
+  amounts?: readonly number[];
+  size?: Size | null;
+  /** Step to animate in. */
+  fresh?: string | null;
+}
+
+type Amt = (step: string) => number;
+const NICE = 0.58;
+const SIZE_SCALE: Record<Size, number> = { S: 0.82, M: 0.92, L: 1 };
+
+/** Cooking colour: pale → golden (in the zone) → dark when left too long. */
+function cooked(a: number, raw: string, gold: string, dark: string): string {
+  if (a < 0.42) return raw;
+  if (a <= 0.8) return gold;
+  return dark;
+}
+
+function drawCupItem(steps: readonly string[], vessel: 'cup' | 'glass', amt: Amt, fresh: string | null): string {
   const clip = nextId('c');
   const isCup = vessel === 'cup';
   const shape = isCup
@@ -116,107 +130,126 @@ function drawCupItem(steps: string[], vessel: 'cup' | 'glass', fresh: string | n
     : 'M28 18 h44 l-5 66 a5 5 0 0 1 -5 5 h-24 a5 5 0 0 1 -5 -5 z';
   const bottom = isCup ? 87 : 89;
   const top = isCup ? 30 : 18;
+  const pourH = isCup ? 34 : 48;
   const parts: string[] = [];
   let y = bottom;
-  const liquids = steps.filter((s) => COLORS[s]);
+  const liquids = steps.filter((x) => COLORS[x]);
   const blended = steps.includes('blend');
-  const bandH = isCup ? 17 : 15;
+  const bandOf = (x: string) => (x === 'berries' || x === 'banana' || x === 'mango' ? 12 : Math.max(2, pourH * amt(x)));
   if (blended) {
-    const h = Math.min(bottom - top - 4, liquids.length * bandH);
+    const h = Math.min(bottom - top - 2, liquids.reduce((n, l) => n + bandOf(l), 0));
     y = bottom - h;
     parts.push(`<rect class="${fresh === 'blend' ? 'pop' : ''}" x="0" y="${y}" width="100" height="${h}" fill="${mix(liquids.map((l) => COLORS[l] as string))}"/>`);
     parts.push(`<g fill="#fff" opacity=".55"><circle cx="40" cy="${y + 4}" r="2.5"/><circle cx="55" cy="${y + 7}" r="2"/><circle cx="62" cy="${y + 3}" r="1.6"/></g>`);
   } else {
-    for (const s of steps) {
-      const c = COLORS[s];
+    for (const x of steps) {
+      const c = COLORS[x];
       if (!c) continue;
       let color = c;
       // milk poured on a hot drink blends into it
-      if (s === 'milk' && isCup) {
-        const under = liquids[liquids.indexOf(s) - 1];
+      if (x === 'milk' && isCup) {
+        const under = liquids[liquids.indexOf(x) - 1];
         color = under === 'cocoa' ? '#b98463' : '#d9b48a';
       }
-      y -= bandH;
-      parts.push(`<rect class="${fresh === s ? 'grow' : ''}" x="0" y="${y}" width="100" height="${bandH + 1}" fill="${color}"/>`);
-      if (s === 'berries' || s === 'mango' || s === 'banana') {
-        const dot = s === 'berries' ? '#a8204f' : s === 'mango' ? '#f08a1c' : '#e8c44a';
-        parts.push(`<g fill="${dot}" opacity=".8"><circle cx="38" cy="${y + 5}" r="2.4"/><circle cx="52" cy="${y + 10}" r="2.4"/><circle cx="63" cy="${y + 5}" r="2.4"/></g>`);
+      const h = bandOf(x);
+      y -= h;
+      parts.push(`<rect class="${fresh === x ? 'grow' : ''}" x="0" y="${y.toFixed(1)}" width="100" height="${(h + 1).toFixed(1)}" fill="${color}"/>`);
+      if (x === 'berries' || x === 'mango' || x === 'banana') {
+        const dot = x === 'berries' ? '#a8204f' : x === 'mango' ? '#f08a1c' : '#e8c44a';
+        parts.push(`<g fill="${dot}" opacity=".8"><circle cx="38" cy="${y + 5}" r="2.4"/><circle cx="52" cy="${y + 9}" r="2.4"/><circle cx="63" cy="${y + 5}" r="2.4"/></g>`);
       }
     }
   }
+  y = Math.max(y, top + 2);
   const inner = `<clipPath id="${clip}"><path d="${shape}"/></clipPath><g clip-path="url(#${clip})">${parts.join('')}</g>`;
   const handle = isCup ? `<path d="M71 40 h5 a11 11 0 0 1 0 22 h-6" fill="none" stroke="${OUT}" stroke-width="5" stroke-linecap="round"/>` : '';
   const saucer = isCup ? `<ellipse cx="48" cy="89" rx="34" ry="5" fill="#f3dccb" ${ST}/>` : '';
   let topping = '';
   if (steps.includes('foam')) {
-    const fy = Math.min(y, top + 6);
-    topping += `<g class="${fresh === 'foam' ? 'pop' : ''}" fill="#fffaf2" ${ST}><path d="M26 ${fy + 4} q-6 -10 6 -12 q4 -10 16 -6 q12 -6 16 6 q12 2 6 12 z"/></g>` +
-      `<path d="M48 ${fy - 2} c-3 -4 -8 0 0 5 c8 -5 3 -9 0 -5z" fill="#c98c5a"/>`;
+    const k = 0.55 + amt('foam') * 0.8;
+    topping += `<g class="${fresh === 'foam' ? 'pop' : ''}" transform="translate(48 ${y}) scale(${k.toFixed(2)})"><path d="M-22 4 q-6 -10 6 -12 q4 -10 16 -6 q12 -6 16 6 q12 2 6 12 z" fill="#fffaf2" ${ST}/>` +
+      `<path d="M0 -6 c-3 -4 -8 0 0 5 c8 -5 3 -9 0 -5z" fill="#c98c5a"/></g>`;
   }
   if (steps.includes('marshmallow')) {
-    topping += `<g class="${fresh === 'marshmallow' ? 'pop' : ''}" ${ST}><rect x="34" y="${y - 9}" width="13" height="11" rx="3" fill="#ffd1e0" transform="rotate(-12 40 ${y - 4})"/><rect x="50" y="${y - 10}" width="13" height="11" rx="3" fill="#fff" transform="rotate(10 56 ${y - 4})"/></g>`;
+    const n = Math.max(1, Math.min(4, Math.round(amt('marshmallow') * 5)));
+    topping += `<g class="${fresh === 'marshmallow' ? 'pop' : ''}" ${ST}>${Array.from({ length: n }, (_, i) => `<rect x="${30 + i * 10}" y="${y - 9 - (i % 2) * 3}" width="12" height="10" rx="3" fill="${i % 2 ? '#fff' : '#ffd1e0'}" transform="rotate(${i % 2 ? 10 : -12} ${36 + i * 10} ${y - 4})"/>`).join('')}</g>`;
+  }
+  if (steps.includes('cream')) {
+    topping += `<g class="${fresh === 'cream' ? 'pop' : ''}">${creamDollop(48, y - 4, 0.6 + amt('cream') * 0.9)}</g>`;
   }
   if (steps.includes('ice')) {
-    topping += `<g class="${fresh === 'ice' ? 'pop' : ''}">${iceCube(36, y - 4, -12)}${iceCube(52, y - 1, 15)}</g>`;
+    const n = Math.max(1, Math.min(4, Math.round(amt('ice') * 5)));
+    topping += `<g class="${fresh === 'ice' ? 'pop' : ''}">${Array.from({ length: n }, (_, i) => iceCube(32 + i * 9, y - 4 + (i % 2) * 5, i % 2 ? 15 : -12)).join('')}</g>`;
+  }
+  if (steps.includes('sugar')) {
+    const n = Math.max(1, Math.min(4, Math.round(amt('sugar') * 5)));
+    topping += `<g class="${fresh === 'sugar' ? 'pop' : ''}">${Array.from({ length: n }, (_, i) => `<rect x="${isCup ? 4 + (i % 2) * 9 : 6 + (i % 2) * 9}" y="${80 - Math.floor(i / 2) * 8}" width="8" height="8" rx="1.5" fill="#fff" stroke="#c9b6a6" stroke-width="1.5"/>`).join('')}</g>`;
   }
   if (blended) {
     topping += `<path d="M58 ${y + 10} L70 6" stroke="#ff7aa2" stroke-width="5" stroke-linecap="round"/><path d="M70 6 h8" stroke="#ff7aa2" stroke-width="5" stroke-linecap="round"/>`;
   }
   const glassFill = isCup ? 'rgba(255,255,255,.35)' : 'rgba(230,246,255,.35)';
   const shine = `<path d="M${isCup ? 30 : 34} ${top + 8} v${isCup ? 36 : 50}" stroke="#fff" stroke-width="3.5" stroke-linecap="round" opacity=".7"/>`;
-  return saucer + handle + `<path d="${shape}" fill="${glassFill}"/>` + inner + topping + `<path d="${shape}" fill="none" ${ST}/>` + shine;
+  return saucer + handle + `<path d="${shape}" fill="${glassFill}"/>` + inner + `<path d="${shape}" fill="none" ${ST}/>` + shine + topping;
 }
 
-function drawSandwich(steps: string[], fresh: string | null): string {
+function drawSandwich(steps: readonly string[], amt: Amt, fresh: string | null): string {
   const toasted = steps.includes('toast');
+  const bread = toasted ? cooked(amt('toast'), '#f5cd8c', '#e09a45', '#a8622a') : '#f5cd8c';
   let y = 70;
-  let out = plate(84) + breadSlice(y, toasted);
-  for (const s of steps.slice(1)) {
-    const cls = fresh === s ? 'pop' : '';
-    if (s === 'ham') {
+  let out = plate(84) + `<rect x="20" y="${y}" width="60" height="11" rx="5" fill="${bread}" ${ST}/>`;
+  for (const x of steps.slice(1)) {
+    const cls = fresh === x ? 'pop' : '';
+    if (x === 'ham') {
       y -= 6;
       out += `<path class="${cls}" d="M17 ${y + 6} q4 -7 10 -3 q6 -5 12 0 q6 -5 12 0 q6 -5 12 0 q6 -5 12 0 q5 -4 8 3 z" fill="#f49aa6" stroke="#cf6878" stroke-width="2"/>`;
-    } else if (s === 'cheese') {
+    } else if (x === 'cheese') {
       y -= 5;
       out += `<path class="${cls}" d="M18 ${y} h64 v5 h-12 l-5 7 l-5 -7 h-24 l-5 7 l-5 -7 h-8 z" fill="#ffd34d" stroke="#d9a520" stroke-width="2"/>`;
-    } else if (s === 'tomato') {
+    } else if (x === 'tomato') {
       y -= 7;
-      out += `<g class="${cls}">${[33, 50, 67].map((x) => `<ellipse cx="${x}" cy="${y + 4}" rx="9" ry="4.5" fill="#ee4b3b" stroke="#b9302a" stroke-width="2"/>`).join('')}</g>`;
-    } else if (s === 'lettuce') {
+      out += `<g class="${cls}">${[33, 50, 67].map((cx) => `<ellipse cx="${cx}" cy="${y + 4}" rx="9" ry="4.5" fill="#ee4b3b" stroke="#b9302a" stroke-width="2"/>`).join('')}</g>`;
+    } else if (x === 'lettuce') {
       y -= 6;
       out += `<path class="${cls}" d="M16 ${y + 7} q5 -10 10 -3 q5 -8 10 -1 q5 -8 10 -1 q5 -8 10 -1 q5 -8 10 -1 q5 -8 10 -1 q4 -4 6 6 z" fill="#7cc35a" stroke="#4f9238" stroke-width="2"/>`;
-    } else if (s === 'toast') {
-      out += `<g class="${cls}">${breadSlice(y, true, true)}</g>` + steam(50, y - 20);
+    } else if (x === 'toast') {
+      const lines = amt('toast') >= 0.42 ? [34, 46, 58].map((lx) => `<path d="M${lx} ${y - 13} l8 10" stroke="#8a4f1f" stroke-width="3" stroke-linecap="round"/>`).join('') : '';
+      out += `<g class="${cls}"><path d="M20 ${y} v-6 q0 -12 14 -12 h32 q14 0 14 12 v6 z" fill="${bread}" ${ST}/>${lines}</g>` + steam(50, y - 20);
     }
   }
   return out;
 }
 
-function drawPlate(steps: string[], fresh: string | null): string {
+function drawPlate(steps: readonly string[], amt: Amt, fresh: string | null): string {
   let out = plate(82);
   let top = 78;
-  for (const s of steps.slice(1)) {
-    const cls = fresh === s ? 'pop' : '';
-    if (s === 'croissant') {
-      out += `<g class="${cls}">${croissantShape(50, 66, 1.15)}</g>`;
+  for (const x of steps.slice(1)) {
+    const cls = fresh === x ? 'pop' : '';
+    if (x === 'croissant') {
+      const warmA = steps.includes('warm') ? amt('warm') : 0.3;
+      const fill = cooked(warmA, '#eaa43f', '#e39331', '#b8682a');
+      out += `<g class="${cls}">${croissantShape(50, 66, 1.15).replace('fill="#eaa43f"', `fill="${fill}"`)}</g>`;
       top = 50;
-    } else if (s === 'cake') {
+    } else if (x === 'cake') {
       out += `<g class="${cls}">${cakeSlice(48)}</g>`;
       top = 48;
-    } else if (s === 'cream') {
-      out += `<g class="${cls}">${creamDollop(50, top - 2)}</g>`;
-      top -= 12;
-    } else if (s === 'cherry') {
+    } else if (x === 'cream') {
+      const k = 0.6 + amt('cream') * 0.8;
+      out += `<g class="${cls}">${creamDollop(50, top - 2, k)}</g>`;
+      top -= 10 * k;
+    } else if (x === 'cherry') {
       out += `<g class="${cls}">${cherry(50, top - 2)}</g>`;
-    } else if (s === 'warm') {
-      out += `<g class="glow"><ellipse cx="50" cy="64" rx="30" ry="14" fill="#ffcf6b" opacity=".35"/></g>` + steam(50, top);
+    } else if (x === 'choco') {
+      out += `<g class="${cls}">${chocoDrizzle(28, 72, 58, amt('choco'))}</g>`;
+    } else if (x === 'warm') {
+      out += steam(50, top);
     }
   }
   return out;
 }
 
-function drawIceCream(steps: string[], vessel: 'cone' | 'bowl', fresh: string | null): string {
-  const scoops = steps.filter((s) => s === 'vanilla' || s === 'strawberry');
+function drawIceCream(steps: readonly string[], vessel: 'cone' | 'bowl', amt: Amt, fresh: string | null): string {
+  const scoops = steps.filter((x) => x === 'vanilla' || x === 'strawberry');
   const pos = vessel === 'cone' ? [[50, 50], [50, 30]] : [[39, 60], [61, 60]];
   let out = '';
   if (vessel === 'cone') {
@@ -224,75 +257,84 @@ function drawIceCream(steps: string[], vessel: 'cone' | 'bowl', fresh: string | 
       `<g stroke="#b97a3a" stroke-width="1.6" opacity=".8"><path d="M40 60 L57 80"/><path d="M48 58 L61 72"/><path d="M60 60 L43 80"/><path d="M52 58 L39 70"/></g>`;
   }
   let topY = vessel === 'cone' ? 54 : 66;
-  scoops.forEach((s, i) => {
-    const p = pos[i] ?? pos[0];
-    const [x, y] = p as number[];
-    out += `<g class="${fresh === s && steps[steps.length - 1] === s && i === scoops.length - 1 ? 'pop' : ''}">${scoop(x as number, y as number, s === 'vanilla' ? '#fff3d6' : '#ffb3c6')}</g>`;
-    topY = Math.min(topY, (y as number) - 15);
+  scoops.forEach((x, i) => {
+    const [px, py] = (pos[i] ?? pos[0]) as number[];
+    out += `<g class="${fresh === x && i === scoops.length - 1 ? 'pop' : ''}">${scoop(px as number, py as number, x === 'vanilla' ? '#fff3d6' : '#ffb3c6')}</g>`;
+    topY = Math.min(topY, (py as number) - 15);
   });
   if (vessel === 'bowl') {
     out += `<path d="M18 62 h64 a32 24 0 0 1 -64 0 z" fill="#bfe3ff" ${ST}/><path d="M40 85 h20 l4 8 h-28 z" fill="#9fd0f5" ${ST}/>` +
       `<path d="M26 68 q6 10 16 13" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" opacity=".7"/>`;
   }
-  const cx = 50;
-  if (steps.includes('sprinkles')) out += `<g class="${fresh === 'sprinkles' ? 'pop' : ''}">${sprinkles(cx, topY + 8)}</g>`;
-  if (steps.includes('choco')) out += `<g class="${fresh === 'choco' ? 'pop' : ''}">${chocoDrizzle(vessel === 'cone' ? 37 : 26, vessel === 'cone' ? 63 : 74, topY + 9)}</g>`;
-  if (steps.includes('cherry')) out += `<g class="${fresh === 'cherry' ? 'pop' : ''}">${cherry(cx, topY + 1)}</g>`;
+  if (steps.includes('choco')) out += `<g class="${fresh === 'choco' ? 'pop' : ''}">${chocoDrizzle(vessel === 'cone' ? 37 : 26, vessel === 'cone' ? 63 : 74, topY + 9, amt('choco'))}</g>`;
+  if (steps.includes('sprinkles')) out += `<g class="${fresh === 'sprinkles' ? 'pop' : ''}">${sprinkles(50, topY + 8, 12, Math.round(3 + amt('sprinkles') * 14))}</g>`;
+  if (steps.includes('cherry')) out += `<g class="${fresh === 'cherry' ? 'pop' : ''}">${cherry(50, topY + 1)}</g>`;
   return out;
 }
 
-function drawCrepe(steps: string[], fresh: string | null): string {
-  const cooked = steps.includes('cook');
+function drawCrepe(steps: readonly string[], amt: Amt, fresh: string | null): string {
+  const isCooked = steps.includes('cook');
+  const r = 14 + amt('batter') * 30;
+  const fill = isCooked ? cooked(amt('cook'), '#f8e8b8', '#e9b45f', '#b9742f') : '#f8e8b8';
   let out = `<rect x="44" y="88" width="12" height="11" rx="3" fill="#2f2d38"/><circle cx="50" cy="54" r="40" fill="#3f3d4a" ${ST}/><circle cx="50" cy="54" r="35" fill="#56536a"/>`;
-  out += `<g class="${fresh === 'batter' ? 'grow' : ''}"><circle cx="50" cy="54" r="31" fill="${cooked ? '#e9b45f' : '#f8e8b8'}" stroke="${cooked ? '#c98b3c' : '#e6cf8f'}" stroke-width="2"/></g>`;
-  if (cooked) out += `<g fill="#c98b3c" opacity=".55"><ellipse cx="38" cy="44" rx="4" ry="2.5"/><ellipse cx="62" cy="62" rx="5" ry="3"/><ellipse cx="58" cy="40" rx="3" ry="2"/><ellipse cx="40" cy="66" rx="3" ry="2"/></g>`;
-  for (const s of steps.slice(2)) {
-    const cls = fresh === s ? 'pop' : '';
-    if (s === 'choco') out += `<g class="${cls}">${chocoDrizzle(28, 72, 54)}</g>`;
-    if (s === 'banana') out += `<g class="${cls}">${[[38, 46], [56, 44], [46, 62], [64, 58]].map(([x, y]) => bananaSlice(x as number, y as number)).join('')}</g>`;
-    if (s === 'berries') out += `<g class="${cls}">${[[38, 48, '#d6336c'], [50, 42, '#7b3fa0'], [62, 50, '#d6336c'], [44, 62, '#7b3fa0'], [58, 64, '#d6336c']].map(([x, y, c]) => berry(x as number, y as number, c as string)).join('')}</g>`;
-    if (s === 'cream') out += `<g class="${cls}">${creamDollop(50, 56, 0.9)}</g>`;
+  out += `<g class="${fresh === 'batter' ? 'grow' : ''}"><circle cx="50" cy="54" r="${Math.min(34, r).toFixed(1)}" fill="${fill}" stroke="${isCooked ? '#c98b3c' : '#e6cf8f'}" stroke-width="2"/></g>`;
+  if (isCooked && amt('cook') >= 0.42) out += `<g fill="#c98b3c" opacity=".55"><ellipse cx="38" cy="44" rx="4" ry="2.5"/><ellipse cx="62" cy="62" rx="5" ry="3"/><ellipse cx="58" cy="40" rx="3" ry="2"/><ellipse cx="40" cy="66" rx="3" ry="2"/></g>`;
+  for (const x of steps.slice(2)) {
+    const cls = fresh === x ? 'pop' : '';
+    if (x === 'choco') out += `<g class="${cls}">${chocoDrizzle(28, 72, 54, amt('choco'))}</g>`;
+    if (x === 'banana') out += `<g class="${cls}">${[[38, 46], [56, 44], [46, 62], [64, 58]].map(([bx, by]) => bananaSlice(bx as number, by as number)).join('')}</g>`;
+    if (x === 'berries') out += `<g class="${cls}">${[[38, 48, '#d6336c'], [50, 42, '#7b3fa0'], [62, 50, '#d6336c'], [44, 62, '#7b3fa0'], [58, 64, '#d6336c']].map(([bx, by, c]) => berry(bx as number, by as number, c as string)).join('')}</g>`;
+    if (x === 'cream') out += `<g class="${cls}">${creamDollop(50, 56, 0.5 + amt('cream') * 0.8)}</g>`;
   }
   return out;
 }
 
-/** Picture of an item made of `steps` (possibly incomplete). `fresh` = step to animate in. */
-export function drawItem(steps: readonly string[], fresh: string | null = null): string {
-  const s = [...steps];
-  const vessel = s[0];
+/** Picture of an item made of `steps` (possibly incomplete). */
+export function drawItem(view: ItemView | readonly string[]): string {
+  const v: ItemView = Array.isArray(view) ? { steps: view as readonly string[] } : (view as ItemView);
+  const steps = v.steps;
+  const fresh = v.fresh ?? null;
+  const amt: Amt = (x) => {
+    const i = steps.indexOf(x);
+    const a = i >= 0 ? v.amounts?.[i] : undefined;
+    return a === undefined ? NICE : Math.max(0.02, Math.min(1, a));
+  };
+  const vessel = steps[0];
   let inner: string;
   switch (vessel) {
     case 'cup':
     case 'glass':
-      inner = drawCupItem(s, vessel, fresh);
+      inner = drawCupItem(steps, vessel, amt, fresh);
       break;
     case 'bread':
-      inner = drawSandwich(s, fresh);
+      inner = drawSandwich(steps, amt, fresh);
       break;
     case 'plate':
-      inner = drawPlate(s, fresh);
+      inner = drawPlate(steps, amt, fresh);
       break;
     case 'cone':
     case 'bowl':
-      inner = drawIceCream(s, vessel, fresh);
+      inner = drawIceCream(steps, vessel, amt, fresh);
       break;
     case 'batter':
-      inner = drawCrepe(s, fresh);
+      inner = drawCrepe(steps, amt, fresh);
       break;
     default:
       inner = `<ellipse cx="50" cy="80" rx="36" ry="9" fill="#000" opacity=".08"/><circle cx="50" cy="52" r="30" fill="none" stroke="#c9a88f" stroke-width="3" stroke-dasharray="6 7"/>`;
   }
-  return svg(`<g class="${fresh && s.length === 1 ? 'pop' : ''}">${inner}</g>`, 'item');
+  const k = v.size ? SIZE_SCALE[v.size] : 1;
+  const tf = k !== 1 ? ` transform="translate(${50 - 50 * k} ${92 - 92 * k}) scale(${k})"` : '';
+  return svg(`<g class="${fresh && steps.length === 1 ? 'pop' : ''}"${tf}>${inner}</g>`, 'item');
 }
 
 // ------------------------------------------------------------------ ingredient buttons
 
 const ICONS: Record<string, () => string> = {
-  cup: () => drawCupItem(['cup'], 'cup', null),
-  glass: () => drawCupItem(['glass'], 'glass', null),
+  cup: () => drawCupItem(['cup'], 'cup', () => NICE, null),
+  glass: () => drawCupItem(['glass'], 'glass', () => NICE, null),
   plate: () => plate(60),
-  cone: () => drawIceCream(['cone'], 'cone', null),
-  bowl: () => drawIceCream(['bowl'], 'bowl', null),
+  cone: () => drawIceCream(['cone'], 'cone', () => NICE, null),
+  bowl: () => drawIceCream(['bowl'], 'bowl', () => NICE, null),
   coffee: () =>
     `<rect x="20" y="14" width="60" height="22" rx="8" fill="#d9614c" ${ST}/><rect x="24" y="36" width="10" height="52" fill="#c4503d" ${ST}/>` +
     `<rect x="66" y="36" width="10" height="52" fill="#c4503d" ${ST}/><rect x="18" y="86" width="64" height="8" rx="3" fill="#8a5a44" ${ST}/>` +
@@ -307,6 +349,9 @@ const ICONS: Record<string, () => string> = {
   cocoa: () =>
     `<rect x="26" y="22" width="48" height="66" rx="6" fill="#8a4f2e" ${ST}/><rect x="24" y="16" width="52" height="12" rx="4" fill="#b8693c" ${ST}/>` +
     `<circle cx="50" cy="56" r="15" fill="#f5d8b4" ${ST}/><ellipse cx="50" cy="56" rx="6" ry="9" fill="#6b3e26"/><path d="M50 48 v16" stroke="#f5d8b4" stroke-width="1.5"/>`,
+  sugar: () =>
+    `<path d="M22 50 h56 l-6 36 a6 6 0 0 1 -6 5 h-32 a6 6 0 0 1 -6 -5 z" fill="#cfe9ff" ${ST}/>` +
+    `<g stroke="#c9b6a6" stroke-width="2"><rect x="30" y="34" width="18" height="18" rx="3" fill="#fff" transform="rotate(-10 39 43)"/><rect x="50" y="30" width="18" height="18" rx="3" fill="#fff" transform="rotate(8 59 39)"/><rect x="40" y="16" width="18" height="18" rx="3" fill="#fff"/></g>`,
   marshmallow: () =>
     `<g ${ST}><rect x="20" y="40" width="30" height="28" rx="7" fill="#ffd1e0" transform="rotate(-10 35 54)"/><rect x="48" y="36" width="30" height="28" rx="7" fill="#fff" transform="rotate(8 63 50)"/>` +
     `<rect x="34" y="60" width="30" height="26" rx="7" fill="#e9f3ff"/></g>`,
@@ -377,13 +422,14 @@ export function ingredientIcon(id: string): string {
 }
 
 /** Finished recipe picture (for orders, tray and shop). */
-export function recipeIcon(steps: readonly string[]): string {
-  return drawItem(steps);
+export function recipeIcon(steps: readonly string[], size: Size | null = null, amounts?: readonly number[]): string {
+  return drawItem({ steps, size, amounts });
 }
 
 // ------------------------------------------------------------------ customers
 
-export type Mood = 'wait' | 'happy' | 'oops';
+/** Guests are never angry or sad: 3★ happy, 2★ smile, 1★ "meh" (neutral). */
+export type Mood = 'wait' | 'happy' | 'smile' | 'meh' | 'oops';
 
 const FUR = ['#f6c89f', '#d99a6c', '#a8794f', '#f1e4d4', '#c4c9d4', '#ffd8a8', '#e8b4b8', '#b9d7c1', '#c9b6e4'];
 const SHIRTS = ['#7fb8e8', '#f28e8e', '#8fd19e', '#ffd166', '#c39bd3', '#f7a072', '#6fc3c3'];
@@ -402,17 +448,24 @@ export function customer(look: number, mood: Mood): string {
   if (kind === 2) ears = `<ellipse cx="44" cy="16" rx="8" ry="22" fill="${fur}" ${ST} transform="rotate(-8 44 30)"/><ellipse cx="76" cy="16" rx="8" ry="22" fill="${fur}" ${ST} transform="rotate(8 76 30)"/><ellipse cx="44" cy="17" rx="3.5" ry="15" fill="${inner}" transform="rotate(-8 44 30)"/><ellipse cx="76" cy="17" rx="3.5" ry="15" fill="${inner}" transform="rotate(8 76 30)"/>`;
   if (kind === 4) ears = `<circle cx="30" cy="38" r="15" fill="${fur}" ${ST}/><circle cx="90" cy="38" r="15" fill="${fur}" ${ST}/><circle cx="30" cy="38" r="8" fill="${inner}"/><circle cx="90" cy="38" r="8" fill="${inner}"/>`;
   const tuft = kind === 3 ? `<path d="M50 28 q4 -14 12 -6 q6 -8 8 4" fill="${fur}" ${ST}/>` : '';
+  const dots = `<circle cx="49" cy="61" r="4.5" fill="${OUT}"/><circle cx="71" cy="61" r="4.5" fill="${OUT}"/><circle cx="50.5" cy="59.5" r="1.5" fill="#fff"/><circle cx="72.5" cy="59.5" r="1.5" fill="#fff"/>`;
+  const EYES: Record<Mood, string> = {
+    happy: `<path d="M44 62 q5 -7 10 0 M66 62 q5 -7 10 0" fill="none" stroke="${OUT}" stroke-width="3.5" stroke-linecap="round"/>`,
+    smile: dots,
+    meh: `<circle cx="49" cy="62" r="4" fill="${OUT}"/><circle cx="71" cy="62" r="4" fill="${OUT}"/><path d="M43 59 h12 M65 59 h12" stroke="${fur}" stroke-width="5"/><path d="M43 58 h12 M65 58 h12" stroke="${OUT}" stroke-width="2.5" stroke-linecap="round"/>`,
+    oops: `<circle cx="49" cy="61" r="5.5" fill="#fff" stroke="${OUT}" stroke-width="2"/><circle cx="71" cy="61" r="5.5" fill="#fff" stroke="${OUT}" stroke-width="2"/><circle cx="49" cy="62" r="2.6" fill="${OUT}"/><circle cx="71" cy="62" r="2.6" fill="${OUT}"/><path d="M43 50 q6 -5 12 -1 M65 49 q6 -4 12 1" fill="none" stroke="${OUT}" stroke-width="2.5" stroke-linecap="round"/>`,
+    wait: `<g class="blink">${dots}</g>`,
+  };
+  const MOUTH: Record<Mood, string> = {
+    happy: `<path d="M52 72 q8 10 16 0 z" fill="#e25d6f" stroke="${OUT}" stroke-width="2.5" stroke-linejoin="round"/>`,
+    smile: `<path d="M52 72 q8 8 16 0" fill="none" stroke="${OUT}" stroke-width="3" stroke-linecap="round"/>`,
+    meh: `<path d="M54 75 q6 1.5 12 0" fill="none" stroke="${OUT}" stroke-width="3" stroke-linecap="round"/>`,
+    oops: `<ellipse cx="60" cy="75" rx="3.5" ry="4" fill="#e25d6f" stroke="${OUT}" stroke-width="2"/>`,
+    wait: `<path d="M54 72 q6 6 12 0" fill="none" stroke="${OUT}" stroke-width="3" stroke-linecap="round"/>`,
+  };
   const happy = mood === 'happy';
-  const eyes = happy
-    ? `<path d="M44 62 q5 -7 10 0 M66 62 q5 -7 10 0" fill="none" stroke="${OUT}" stroke-width="3.5" stroke-linecap="round"/>`
-    : mood === 'oops'
-      ? `<circle cx="49" cy="61" r="5.5" fill="#fff" stroke="${OUT}" stroke-width="2"/><circle cx="71" cy="61" r="5.5" fill="#fff" stroke="${OUT}" stroke-width="2"/><circle cx="49" cy="62" r="2.6" fill="${OUT}"/><circle cx="71" cy="62" r="2.6" fill="${OUT}"/><path d="M43 50 q6 -5 12 -1 M65 49 q6 -4 12 1" fill="none" stroke="${OUT}" stroke-width="2.5" stroke-linecap="round"/>`
-      : `<g class="blink"><circle cx="49" cy="61" r="4.5" fill="${OUT}"/><circle cx="71" cy="61" r="4.5" fill="${OUT}"/><circle cx="50.5" cy="59.5" r="1.5" fill="#fff"/><circle cx="72.5" cy="59.5" r="1.5" fill="#fff"/></g>`;
-  const mouth = happy
-    ? `<path d="M52 72 q8 10 16 0 z" fill="#e25d6f" stroke="${OUT}" stroke-width="2.5" stroke-linejoin="round"/>`
-    : mood === 'oops'
-      ? `<ellipse cx="60" cy="75" rx="3.5" ry="4" fill="#e25d6f" stroke="${OUT}" stroke-width="2"/>`
-      : `<path d="M54 72 q6 6 12 0" fill="none" stroke="${OUT}" stroke-width="3" stroke-linecap="round"/>`;
+  const eyes = EYES[mood];
+  const mouth = MOUTH[mood];
   const snout = kind === 0 || kind === 4 ? `<ellipse cx="60" cy="71" rx="11" ry="8" fill="#fff3e6" opacity=".9"/><ellipse cx="60" cy="67" rx="3.5" ry="2.5" fill="${OUT}"/>` : kind === 1 ? `<path d="M57 67 h6 l-3 3 z" fill="#e88a9a"/>` : '';
   let accessory = '';
   if (acc === 1) accessory = `<g fill="rgba(255,255,255,.25)" stroke="${OUT}" stroke-width="2.5"><circle cx="49" cy="61" r="9"/><circle cx="71" cy="61" r="9"/><path d="M58 61 h4"/></g>`;
@@ -492,7 +545,7 @@ export function counter(decor: readonly string[]): string {
     out += `<g transform="translate(316 -2)"><path d="M-8 2 h16 l-3 -18 h-10z" fill="#8fd3ff" stroke="#6b4433" stroke-width="2"/>` +
       `<g stroke="#6b4433" stroke-width="1.5"><circle cx="-6" cy="-24" r="6" fill="#ff8fab"/><circle cx="6" cy="-26" r="6" fill="#ffd166"/><circle cx="0" cy="-34" r="6" fill="#b98cff"/></g></g>`;
   }
-  return svg(out, 'counter', '0 0 360 50');
+  return svg(out, 'counter', '0 0 360 50').replace('<svg ', '<svg style="overflow:visible" ');
 }
 
 // ------------------------------------------------------------------ UI icons
@@ -514,6 +567,9 @@ export const icon = {
   back: () => svg(`<path d="M60 20 L30 50 L60 80" fill="none" stroke="currentColor" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>`),
   next: () => svg(`<path d="M40 20 L70 50 L40 80" fill="none" stroke="currentColor" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>`),
   gear: () => svg(`<circle cx="50" cy="50" r="16" fill="none" stroke="currentColor" stroke-width="9"/>${[0, 45, 90, 135, 180, 225, 270, 315].map((a) => `<rect x="45" y="12" width="10" height="16" rx="3" fill="currentColor" transform="rotate(${a} 50 50)"/>`).join('')}`),
+  star: (cls = '') => svg(`<path d="M50 8 L62 36 L92 38 L69 58 L76 88 L50 72 L24 88 L31 58 L8 38 L38 36 Z" fill="#ffd23f" stroke="#c98f1a" stroke-width="5" stroke-linejoin="round"/>`, cls),
+  hand: () =>
+    svg(`<path d="M38 56 V20 a7 7 0 0 1 14 0 v26 l2 -10 a7 7 0 0 1 13 3 l-1 9 l2 -6 a7 7 0 0 1 12 4 l-2 14 q-2 24 -22 30 h-10 q-14 -2 -22 -20 l-10 -18 a7 7 0 0 1 11 -8 z" fill="#fff" stroke="${OUT}" stroke-width="4" stroke-linejoin="round"/>`, 'hand'),
   guest: () => svg(`<circle cx="50" cy="36" r="18" fill="currentColor"/><path d="M18 88 q0 -32 32 -32 q32 0 32 32z" fill="currentColor"/>`),
   jar: () => svg(`<path d="M28 30 h44 v46 a10 10 0 0 1 -10 10 h-24 a10 10 0 0 1 -10 -10z" fill="rgba(255,255,255,.6)" stroke="#6b4433" stroke-width="5"/><rect x="24" y="20" width="52" height="12" rx="4" fill="#8a5a44"/><circle cx="42" cy="68" r="9" fill="#ffd23f" stroke="#c98f1a" stroke-width="3"/><circle cx="58" cy="60" r="9" fill="#ffd23f" stroke="#c98f1a" stroke-width="3"/>`),
   sun: () => svg(`<circle cx="50" cy="50" r="18" fill="#ffc94d"/>${[0, 45, 90, 135, 180, 225, 270, 315].map((a) => `<rect x="47" y="10" width="6" height="14" rx="3" fill="#ffc94d" transform="rotate(${a} 50 50)"/>`).join('')}`),

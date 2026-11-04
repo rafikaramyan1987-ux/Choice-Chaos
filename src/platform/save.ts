@@ -1,6 +1,6 @@
 import { readJSON, removeKey, writeJSON } from './storage';
 import { newProgress, type Progress } from '../core/game';
-import { DECOR_BY_ID, MACHINES, MAX_EQUIPMENT_LEVEL, RECIPE_BY_ID, STARTER_RECIPE } from '../core/recipes';
+import { DECOR_BY_ID, MACHINES, MAX_EQUIPMENT_LEVEL, RECIPE_BY_ID, STARTER_RECIPES } from '../core/recipes';
 
 export const SAVE_KEY = 'cozy-cafe.save.v1';
 
@@ -11,6 +11,8 @@ export interface SaveData {
   settings: { lang: string | null; muted: boolean; vibration: boolean };
   /** Day on which the rewarded "unlock now" was last used (once per day). */
   rewardUnlockDay: number;
+  /** Actions whose first-time hint (hand animation) was already shown. */
+  hints: string[];
 }
 
 export function emptySave(): SaveData {
@@ -20,6 +22,7 @@ export function emptySave(): SaveData {
     stats: { customers: 0, perfect: 0, days: 0, earned: 0 },
     settings: { lang: null, muted: false, vibration: true },
     rewardUnlockDay: 0,
+    hints: [],
   };
 }
 
@@ -34,7 +37,7 @@ export function sanitizeSave(raw: unknown): SaveData {
   if (data.version !== 1) return base;
   const p = obj(data.progress);
   const recipes = Array.isArray(p.recipes) ? p.recipes.filter((id): id is string => typeof id === 'string' && !!RECIPE_BY_ID[id]) : [];
-  const uniqueRecipes = [...new Set([STARTER_RECIPE, ...recipes])];
+  const uniqueRecipes = [...new Set([...STARTER_RECIPES, ...recipes])];
   const eq = obj(p.equipment);
   const equipment = { ...base.progress.equipment };
   for (const m of MACHINES) equipment[m] = Math.min(MAX_EQUIPMENT_LEVEL, num(eq[m], 0));
@@ -56,6 +59,7 @@ export function sanitizeSave(raw: unknown): SaveData {
       vibration: se.vibration !== false,
     },
     rewardUnlockDay: num(data.rewardUnlockDay, 0),
+    hints: Array.isArray(data.hints) ? [...new Set(data.hints.filter((h): h is string => typeof h === 'string'))] : [],
   };
 }
 

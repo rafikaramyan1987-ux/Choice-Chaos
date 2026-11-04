@@ -1,6 +1,6 @@
 import {
   DayRun,
-  applyDayGifts,
+  OK_MARGIN,
   buyDecor,
   buyEquipment,
   buyRecipe,
@@ -9,11 +9,14 @@ import {
   grantRecipe,
   isMachine,
   machineNeeded,
+  judge,
   machineOf,
   recipeStatus,
+  zoneWidth,
   type Payment,
+  type Quality,
 } from '../core/game';
-import { DECOR, INGREDIENTS, MACHINES, MAX_EQUIPMENT_LEVEL, RECIPES, getRecipe, machineDuration, stationIngredients } from '../core/recipes';
+import { DECOR, INGREDIENTS, MACHINES, MAX_EQUIPMENT_LEVEL, RECIPES, actionOf, getRecipe, machineDuration, stationIngredients } from '../core/recipes';
 import { mulberry32, randomSeed } from '../core/rng';
 import { GameplayTracker, MidgameThrottle, midgameAllowed, type Platform } from '../platform/ads';
 import { vibrate, type Sound } from '../platform/audio';
@@ -31,6 +34,42 @@ export interface AppOptions {
 
 type ShopTab = 'recipes' | 'equipment' | 'decor';
 
+interface ActiveAction {
+  id: string;
+  kind: 'pour' | 'topping' | 'timing';
+  /** pointerId holding the button; -1 keyboard, -2 timing, -3 quick tap. */
+  pointer: number;
+  start: number;
+  level: number;
+  target: number;
+  width: number;
+  /** Machine warm-up before the bar reaches the green zone. */
+  warm: number;
+  raf: number;
+  stopSound: (() => void) | null;
+}
+
+/** Full gauge time when holding (ms). */
+export const POUR_MS = 2600;
+export const TOPPING_MS = 2200;
+/** Time the timing bar needs to cross the green zone, whatever the machine level. */
+export const ZONE_CROSS_MS = 1400;
+
+/** Gauge level (0..1) after `t` ms of an action. */
+export function actionLevel(kind: 'pour' | 'topping' | 'timing', t: number, target: number, width: number, warm: number, slow = false): number {
+  const k = slow ? 1.25 : 1;
+  if (kind === 'pour') return Math.min(1, t / (POUR_MS * k));
+  if (kind === 'topping') return Math.min(1, t / (TOPPING_MS * k));
+  const lo = Math.max(0.05, target - width / 2);
+  if (t < warm) return (lo * t) / warm;
+  return Math.min(1, lo + ((t - warm) / (ZONE_CROSS_MS * k)) * width);
+}
+
+function hintKind(id: string): 'tap' | 'hold' | 'timing' {
+  const a = actionOf(id);
+  return a === 'tap' ? 'tap' : a === 'timing' ? 'timing' : 'hold';
+}
+
 export class App {
   private save: SaveData;
   private readonly gameplay: GameplayTracker;
@@ -45,6 +84,9 @@ export class App {
   private shopTab: ShopTab = 'recipes';
   private shopReturn: () => void = () => this.renderTitle();
   private suppressClick = false;
+  private action: ActiveAction | null = null;
+  /** A fancy recipe just unlocked: the first guest of the next day asks for it. */
+  private preferNext: string | null = null;
 
   constructor(private readonly o: AppOptions) {
     this.save = loadSave();
@@ -206,10 +248,9 @@ export class App {
   // ------------------------------------------------------------------ day flow
 
   private async startDay(): Promise<void> {
-    const gifts = applyDayGifts(this.p);
-    if (gifts.length) this.persist();
     this.seed = (this.seed + 0x9e3779b9) >>> 0;
-    this.run = new DayRun(this.p.day, this.p.recipes, mulberry32(this.seed ^ this.p.day));
+    this.run = new DayRun(this.p.day, this.p.recipes, mulberry32(this.seed ^ this.p.day), this.preferNext ?? undefined);
+    this.preferNext = null;
     this.lastSummaryDoubled = false;
     this.renderPlay();
     this.sfx('day');
@@ -217,7 +258,6 @@ export class App {
     banner.className = 'day-banner';
     banner.innerHTML = `${icon.sun()}<span>${esc(t('day', { n: this.p.day }))}</span>`;
     $('.scene', this.o.root)?.appendChild(banner);
-    for (const id of gifts) this.celebrateRecipe(id);
     await wait(this.ms(900));
     banner.remove();
     this.gameplay.start();
@@ -242,27 +282,36 @@ export class App {
           <div class="counter-wrap">${counter(this.p.decor)}</div>
           <div class="fx" id="fx"></div>
         </section>
-        <section class="station">
+        <section class="station" id="station">
           <div class="strip" id="strip" aria-hidden="true"></div>
           <div class="work-row">
             <button class="round-btn" id="redo" aria-label="${esc(t('redo'))}">${icon.redo()}</button>
-            <div class="work" id="work"><div class="work-item" id="work-item"></div><div class="pour" id="pour"></div><div class="machine-ring" id="ring"></div></div>
+            <div class="work" id="work">
+              <div class="work-item" id="work-item"></div>
+              <div class="pour" id="pour"></div>
+              <div class="gauge hidden" id="gauge" aria-hidden="true"><div class="gauge-ok" id="gauge-ok"></div><div class="gauge-zone" id="gauge-zone"></div><div class="gauge-fill" id="gauge-fill"></div><div class="gauge-mark" id="gauge-mark"></div></div>
+            </div>
             <div class="tray-col">
               <div class="tray" id="tray" aria-label="${esc(t('tray'))}"></div>
               <button class="serve" id="serve" disabled aria-label="${esc(t('serve'))}">${icon.bell()}</button>
             </div>
           </div>
           <div class="ingredients" id="ings" role="group" aria-label="${esc(t('ingredients'))}"></div>
+          <div class="hand-hint hidden" id="hand">${icon.hand()}</div>
         </section>
       </div>`;
     this.bindMute();
     $('#redo', this.o.root)?.addEventListener('click', () => {
-      if (this.busy || !this.run || this.run.steps.length === 0) return;
+      if (this.busy || this.action || !this.run || this.run.steps.length === 0) return;
       this.run.redo();
       this.sfx('tap');
       this.renderStation();
     });
     $('#serve', this.o.root)?.addEventListener('click', () => void this.serve());
+    // during a timing step, a tap anywhere on the station stops the machine
+    $('#station', this.o.root)?.addEventListener('pointerdown', () => {
+      if (this.action?.kind === 'timing') this.finishAction();
+    });
     this.bindIngredients();
   }
 
@@ -288,31 +337,40 @@ export class App {
     if (!run || !el || !run.order) return;
     const order = run.order;
     el.innerHTML = order.items
-      .map((id, i) => {
+      .map((it, i) => {
         const cls = i < run.tray.length ? 'ready' : i === run.tray.length ? 'active' : '';
-        return `<div class="order-item ${cls}" title="${esc(name('recipes', id))}">${recipeIcon(getRecipe(id).steps)}${i < run.tray.length ? `<span class="tick">${icon.check()}</span>` : ''}</div>`;
+        const badge = it.size ? `<span class="size-badge size-${it.size}">${it.size}</span>` : '';
+        return `<div class="order-item ${cls}" data-recipe="${it.recipe}">${recipeIcon(it.steps, it.size, it.targets)}${badge}${i < run.tray.length ? `<span class="tick">${icon.check()}</span>` : ''}</div>`;
       })
       .join('');
-    el.setAttribute('aria-label', `${t('order')}: ${order.items.map((id) => name('recipes', id)).join(', ')}`);
+    el.setAttribute('aria-label', `${t('order')}: ${order.items.map((it) => `${name('recipes', it.recipe)}${it.size ? ` (${it.size})` : ''}`).join(', ')}`);
   }
 
-  /** Re-renders strip, item, tray, ingredient buttons. */
+  private drawWork(fresh: string | null, live?: { id: string; level: number }): void {
+    const run = this.run;
+    const el = $('#work-item', this.o.root);
+    if (!run || !el) return;
+    const steps = live ? [...run.steps, live.id] : run.steps;
+    const amounts = live ? [...run.amounts, live.level] : run.amounts;
+    el.innerHTML = drawItem({ steps, amounts, size: run.currentItem?.size ?? null, fresh });
+  }
+
+  /** Re-renders strip, item, gauge, tray and ingredient buttons. */
   private renderStation(fresh: string | null = null): void {
     const run = this.run;
     if (!run) return;
-    const recipe = run.currentRecipe;
+    const item = run.currentItem;
     const strip = $('#strip', this.o.root);
     if (strip) {
-      strip.innerHTML = recipe
-        ? recipe.steps
-            .map((s, i) => `<div class="step ${i < run.steps.length ? 'done' : i === run.steps.length ? 'current' : ''}" data-step="${s}">${ingredientIcon(s)}</div>`)
+      strip.innerHTML = item
+        ? item.steps
+            .map((s, i) => `<div class="step ${i < run.steps.length ? 'done' : i === run.steps.length ? 'current' : ''} act-${actionOf(s)}" data-step="${s}" data-action="${actionOf(s)}">${ingredientIcon(s)}</div>`)
             .join('<span class="arrow">›</span>')
         : '';
     }
-    const item = $('#work-item', this.o.root);
-    if (item) item.innerHTML = drawItem(run.steps, fresh);
+    this.drawWork(fresh);
     const tray = $('#tray', this.o.root);
-    if (tray) tray.innerHTML = run.tray.map((id, i) => `<div class="tray-item ${i === run.tray.length - 1 && fresh === 'tray' ? 'pop-in' : ''}">${recipeIcon(getRecipe(id).steps)}</div>`).join('');
+    if (tray) tray.innerHTML = run.tray.map((p, i) => `<div class="tray-item ${i === run.tray.length - 1 && fresh === 'tray' ? 'pop-in' : ''}">${recipeIcon(p.item.steps, p.item.size, p.amounts)}</div>`).join('');
     const serve = $('#serve', this.o.root) as HTMLButtonElement | null;
     if (serve) {
       serve.disabled = !run.canServe;
@@ -322,25 +380,71 @@ export class App {
     if (redo) redo.disabled = run.steps.length === 0;
     const ings = $('#ings', this.o.root);
     if (ings) {
-      const station = recipe?.station ?? getRecipe(run.order?.items[0] ?? 'latte').station;
+      const station = getRecipe(item?.recipe ?? run.order?.items[0]?.recipe ?? 'latte').station;
       const list = stationIngredients(station, this.p.recipes);
       const key = list.join(',');
       if (ings.dataset.key !== key) {
         ings.dataset.key = key;
         ings.innerHTML = list
-          .map(
-            (id) =>
-              `<button class="ing ${machineOf(id) ? 'machine' : ''}" data-ing="${id}" aria-label="${esc(name('ingredients', id))}">${ingredientIcon(id)}</button>`,
-          )
+          .map((id) => `<button class="ing act-${actionOf(id)}" data-ing="${id}" aria-label="${esc(name('ingredients', id))}">${ingredientIcon(id)}</button>`)
           .join('');
       }
       ings.querySelectorAll<HTMLButtonElement>('.ing').forEach((b) => {
-        b.disabled = this.busy || !recipe;
-        b.classList.remove('hint');
+        b.disabled = this.busy || !item;
+        b.classList.remove('hint', 'holding');
       });
     }
     this.renderBubble();
+    this.prepareGauge();
     this.scheduleHint();
+    this.showHandHint();
+  }
+
+  /** Shows the green zone of the next pour/topping/timing step before it starts. */
+  private prepareGauge(): void {
+    const run = this.run;
+    const g = $('#gauge', this.o.root);
+    if (!run || !g) return;
+    const next = run.nextIngredient;
+    const act = next ? actionOf(next) : 'tap';
+    if (!next || act === 'tap' || this.busy) {
+      g.classList.add('hidden');
+      return;
+    }
+    const width = zoneWidth(run.day);
+    const target = run.nextTarget;
+    const lo = Math.max(0, target - width / 2);
+    const hi = Math.min(1, target + width / 2);
+    g.className = `gauge act-${act}`;
+    g.dataset.lo = String(lo);
+    g.dataset.hi = String(hi);
+    g.dataset.level = '0';
+    const zone = $('#gauge-zone', this.o.root);
+    if (zone) {
+      zone.style.bottom = `${lo * 100}%`;
+      zone.style.height = `${(hi - lo) * 100}%`;
+    }
+    const ok = $('#gauge-ok', this.o.root);
+    if (ok) {
+      const olo = Math.max(0, lo - OK_MARGIN);
+      const ohi = Math.min(1, hi + OK_MARGIN);
+      ok.style.bottom = `${olo * 100}%`;
+      ok.style.height = `${(ohi - olo) * 100}%`;
+    }
+    this.setGaugeLevel(0);
+  }
+
+  private setGaugeLevel(level: number): void {
+    const g = $('#gauge', this.o.root);
+    if (!g) return;
+    g.dataset.level = level.toFixed(3);
+    const fill = $('#gauge-fill', this.o.root);
+    if (fill) fill.style.height = `${level * 100}%`;
+    const mark = $('#gauge-mark', this.o.root);
+    if (mark) mark.style.bottom = `${level * 100}%`;
+    const lo = Number(g.dataset.lo);
+    const hi = Number(g.dataset.hi);
+    g.classList.toggle('in-zone', level >= lo && level <= hi);
   }
 
   private scheduleHint(): void {
@@ -348,10 +452,37 @@ export class App {
     const run = this.run;
     const next = run?.nextIngredient;
     if (!run || !next) return;
-    const delay = run.day <= 2 ? 2500 : 5000;
     this.hintTimer = window.setTimeout(() => {
       $(`.ing[data-ing="${next}"]`, this.o.root)?.classList.add('hint');
-    }, delay);
+    }, 3500);
+  }
+
+  /** First time an action appears: a hand shows what to do (tap / hold / tap in the green). */
+  private showHandHint(): void {
+    const hand = $('#hand', this.o.root);
+    const run = this.run;
+    if (!hand || !run) return;
+    const next = run.nextIngredient;
+    const kind = next ? hintKind(next) : null;
+    if (!next || !kind || this.busy || this.save.hints.includes(kind)) {
+      hand.className = 'hand-hint hidden';
+      return;
+    }
+    const btn = $(`.ing[data-ing="${next}"]`, this.o.root);
+    const station = $('#station', this.o.root);
+    if (!btn || !station) return;
+    const b = btn.getBoundingClientRect();
+    const s = station.getBoundingClientRect();
+    hand.style.left = `${b.left - s.left + b.width / 2 - 10}px`;
+    hand.style.top = `${b.top - s.top + b.height / 2 - 6}px`;
+    hand.className = `hand-hint show-${kind}`;
+  }
+
+  private markHintSeen(kind: string): void {
+    if (this.save.hints.includes(kind)) return;
+    this.save.hints.push(kind);
+    this.persist();
+    $('#hand', this.o.root)?.classList.add('hidden');
   }
 
   private bindIngredients(): void {
@@ -366,18 +497,46 @@ export class App {
       }
       void this.addIngredient(b.dataset.ing ?? '');
     });
-    // drag & drop onto the work area (tap works too)
+    // keyboard: hold Space/Enter to pour
+    ings.addEventListener('keydown', (e) => {
+      const b = (e.target as HTMLElement).closest<HTMLButtonElement>('.ing');
+      if (!b || b.disabled || e.repeat || (e.key !== ' ' && e.key !== 'Enter')) return;
+      if (this.action?.kind === 'timing') {
+        e.preventDefault();
+        this.finishAction();
+        return;
+      }
+      const id = b.dataset.ing ?? '';
+      if (this.isHoldStep(id)) {
+        e.preventDefault();
+        this.startAction(id, -1);
+      }
+    });
+    ings.addEventListener('keyup', (e) => {
+      if ((e.key === ' ' || e.key === 'Enter') && this.action && this.action.pointer === -1 && this.action.kind !== 'timing') this.finishAction();
+    });
+    // hold to pour + drag & drop for tap ingredients
     let drag: { id: string; x: number; y: number; ghost: HTMLElement | null; pid: number } | null = null;
     ings.addEventListener('pointerdown', (e) => {
       const b = (e.target as HTMLElement).closest<HTMLButtonElement>('.ing');
-      if (!b || b.disabled) return;
-      drag = { id: b.dataset.ing ?? '', x: e.clientX, y: e.clientY, ghost: null, pid: e.pointerId };
+      if (!b || b.disabled || this.action) return;
+      const id = b.dataset.ing ?? '';
+      if (this.isHoldStep(id)) {
+        e.preventDefault();
+        this.suppressClick = true;
+        try {
+          b.releasePointerCapture(e.pointerId);
+        } catch {
+          /* ignore */
+        }
+        this.startAction(id, e.pointerId);
+        return;
+      }
+      if (actionOf(id) === 'tap') drag = { id, x: e.clientX, y: e.clientY, ghost: null, pid: e.pointerId };
     });
     window.addEventListener('pointermove', (e) => {
       if (!drag || e.pointerId !== drag.pid) return;
-      const dx = e.clientX - drag.x;
-      const dy = e.clientY - drag.y;
-      if (!drag.ghost && Math.hypot(dx, dy) > 14) {
+      if (!drag.ghost && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 14) {
         drag.ghost = document.createElement('div');
         drag.ghost.className = 'drag-ghost';
         drag.ghost.innerHTML = ingredientIcon(drag.id);
@@ -390,6 +549,10 @@ export class App {
       }
     });
     const end = (e: PointerEvent) => {
+      if (this.action && this.action.pointer === e.pointerId && this.action.kind !== 'timing') {
+        this.finishAction();
+        setTimeout(() => (this.suppressClick = false), 50);
+      }
       if (!drag || e.pointerId !== drag.pid) return;
       const d = drag;
       drag = null;
@@ -405,48 +568,127 @@ export class App {
     window.addEventListener('pointercancel', end);
   }
 
+  private isHoldStep(id: string): boolean {
+    const a = actionOf(id);
+    return (a === 'pour' || a === 'topping') && this.run?.nextIngredient === id && !this.busy;
+  }
+
+  /** Tap ingredients are added at once; wrong ones get a gentle oops; timing steps start the machine. */
   private async addIngredient(id: string): Promise<void> {
     const run = this.run;
-    const recipe = run?.currentRecipe;
-    if (!run || !recipe || this.busy || !INGREDIENTS[id]) return;
-    const preview = checkStep(recipe, run.steps, id);
-    if (preview === 'oops') {
+    const item = run?.currentItem;
+    if (!run || !item || this.busy || this.action || !INGREDIENTS[id]) return;
+    if (checkStep(item.steps, run.steps, id) === 'oops') {
       run.add(id); // counts the mistake, adds nothing
       this.oops();
       return;
     }
-    this.busy = true;
-    this.renderStation();
-    const ing = INGREDIENTS[id];
-    const machine = machineOf(id);
-    const work = $('#work', this.o.root);
-    if (machine) {
-      const dur = machineDuration(this.p.equipment[machine]);
-      this.sfx(ing?.fx === 'blend' ? 'blend' : ing?.fx === 'pour' ? 'pour' : 'sizzle', dur / 1000);
-      work?.classList.add(`fx-${ing?.fx ?? 'sizzle'}`, 'working');
-      work?.style.setProperty('--dur', `${dur}ms`);
-      await wait(dur);
-      work?.classList.remove(`fx-${ing?.fx ?? 'sizzle'}`, 'working');
-    } else if (ing?.fx === 'pour') {
-      this.sfx('pour', 0.45);
-      work?.style.setProperty('--pour', pourColor(id));
-      work?.classList.add('fx-pour');
-      await wait(this.ms(380));
-      work?.classList.remove('fx-pour');
-    } else {
-      this.sfx('drop');
+    const act = actionOf(id);
+    if (act === 'timing') {
+      this.startAction(id, -2);
+      return;
     }
-    if (!this.run || this.run !== run) return;
-    const res = run.add(id);
-    this.busy = false;
+    if (act !== 'tap') {
+      // a quick tap on a pour step: pour a tiny bit (encourages holding)
+      this.startAction(id, -3);
+      setTimeout(() => this.finishAction(), 120);
+      return;
+    }
+    this.sfx('drop');
+    this.markHintSeen('tap');
+    await this.commit(id, 3, 1);
+  }
+
+  /** Starts holding (pour/topping) or a machine bar (timing). */
+  private startAction(id: string, pointer: number): void {
+    const run = this.run;
+    if (!run || this.action) return;
+    const kind = actionOf(id) as 'pour' | 'topping' | 'timing';
+    const width = zoneWidth(run.day);
+    const target = run.nextTarget;
+    const machine = machineOf(id);
+    const warm = kind === 'timing' && machine ? machineDuration(this.p.equipment[machine]) : 0;
+    const a: ActiveAction = { id, kind, pointer, start: performance.now(), level: 0, target, width, warm, raf: 0, stopSound: null };
+    this.action = a;
+    clearTimeout(this.hintTimer);
+    $('#hand', this.o.root)?.classList.add('hidden');
+    const btn = $(`.ing[data-ing="${id}"]`, this.o.root);
+    btn?.classList.add('holding');
+    btn?.classList.remove('hint');
+    const work = $('#work', this.o.root);
+    if (kind === 'pour') {
+      work?.style.setProperty('--pour', pourColor(id));
+      work?.classList.add('pouring');
+      a.stopSound = this.o.sound.loop('pour');
+    } else if (kind === 'topping') {
+      work?.classList.add('sprinkling');
+      a.stopSound = this.o.sound.loop('pour', 0.5);
+    } else {
+      work?.classList.add(id === 'blend' ? 'fx-blend' : 'fx-sizzle', 'working');
+      a.stopSound = this.o.sound.loop(id === 'blend' ? 'blend' : 'sizzle');
+      $('#gauge', this.o.root)?.classList.add('timing-run');
+    }
+    const tick = () => {
+      if (this.action !== a) return;
+      const t = performance.now() - a.start;
+      a.level = actionLevel(kind, t, a.target, a.width, a.warm, this.reduced);
+      this.setGaugeLevel(a.level);
+      this.drawWork(null, { id, level: a.level });
+      if (a.level >= 1) {
+        this.finishAction();
+        return;
+      }
+      a.raf = requestAnimationFrame(tick);
+    };
+    a.raf = requestAnimationFrame(tick);
+  }
+
+  private finishAction(): void {
+    const a = this.action;
+    const run = this.run;
+    if (!a || !run) return;
+    this.action = null;
+    cancelAnimationFrame(a.raf);
+    a.stopSound?.();
+    const work = $('#work', this.o.root);
+    work?.classList.remove('pouring', 'sprinkling', 'fx-blend', 'fx-sizzle', 'working');
+    $('#gauge', this.o.root)?.classList.remove('timing-run');
+    const level = Math.max(0.02, Math.min(1, a.level));
+    this.setGaugeLevel(level);
+    const q = judge(level, a.target, a.width);
+    this.showQuality(q);
+    this.markHintSeen(a.kind === 'timing' ? 'timing' : 'hold');
+    void this.commit(a.id, q, level);
+  }
+
+  private showQuality(q: Quality): void {
+    this.sfx(q === 3 ? 'perfect' : q === 2 ? 'good' : 'soft');
+    if (q === 3) this.buzz(15);
+    const work = $('#work', this.o.root);
+    if (!work) return;
+    const el = document.createElement('div');
+    el.className = `quality q${q}`;
+    el.dataset.q = String(q);
+    el.innerHTML = Array.from({ length: 3 }, (_, i) => icon.star(i < q ? 'on' : 'off')).join('');
+    work.appendChild(el);
+    setTimeout(() => el.remove(), 900);
+  }
+
+  /** Adds a validated step to the run and animates the result. */
+  private async commit(id: string, q: Quality, amount: number): Promise<void> {
+    const run = this.run;
+    if (!run) return;
+    const res = run.add(id, q, amount);
     if (res === 'done') {
       this.sfx('done');
-      this.buzz(15);
-      const done = run.tray[run.tray.length - 1] as string;
-      const item = $('#work-item', this.o.root);
-      if (item) item.innerHTML = drawItem(getRecipe(done).steps, null);
-      item?.classList.add('to-tray');
       this.busy = true;
+      const done = run.tray[run.tray.length - 1];
+      const item = $('#work-item', this.o.root);
+      if (item && done) item.innerHTML = drawItem({ steps: done.item.steps, amounts: done.amounts, size: done.item.size });
+      $('#gauge', this.o.root)?.classList.add('hidden');
+      ($('#ings', this.o.root)?.querySelectorAll<HTMLButtonElement>('.ing') ?? []).forEach((b) => (b.disabled = true));
+      await wait(this.ms(350));
+      item?.classList.add('to-tray');
       await wait(this.ms(420));
       this.busy = false;
       item?.classList.remove('to-tray');
@@ -464,12 +706,11 @@ export class App {
     work?.classList.remove('wiggle');
     void work?.offsetWidth;
     work?.classList.add('wiggle');
-    const fx = $('#work', this.o.root);
-    if (fx) {
+    if (work) {
       const b = document.createElement('div');
       b.className = 'oops-bubble';
       b.textContent = t('oops');
-      fx.appendChild(b);
+      work.appendChild(b);
       setTimeout(() => b.remove(), 900);
     }
     this.renderGuest('oops');
@@ -504,35 +745,36 @@ export class App {
 
   private async serve(): Promise<void> {
     const run = this.run;
-    if (!run || this.busy || !run.canServe) return;
+    if (!run || this.busy || this.action || !run.canServe) return;
     this.busy = true;
     clearTimeout(this.hintTimer);
     const before = this.p.coins;
+    const look = run.order?.look ?? 0;
     const pay = run.serve(this.watch.elapsed()) as Payment;
     this.p.coins += pay.total;
     this.save.stats.customers += 1;
     this.save.stats.earned += pay.total;
-    if (pay.perfect) this.save.stats.perfect += 1;
+    if (pay.stars === 3) this.save.stats.perfect += 1;
     this.persist();
     this.sfx('bell');
-    this.buzz([20, 40, 20]);
+    this.buzz(pay.stars === 3 ? [20, 40, 20] : 20);
     const serveBtn = $('#serve', this.o.root) as HTMLButtonElement | null;
     if (serveBtn) {
       serveBtn.disabled = true;
       serveBtn.classList.remove('ready');
     }
-    // the tray slides to the customer
     $('#tray', this.o.root)?.classList.add('served');
     $('#bubble', this.o.root)?.classList.add('hidden');
     const guest = $('#guest', this.o.root);
-    const look = run.orders[run.index - 1]?.look ?? 0;
+    const mood: Mood = pay.stars === 3 ? 'happy' : pay.stars === 2 ? 'smile' : 'meh';
     if (guest) {
-      guest.className = 'guest-wrap hop';
-      guest.innerHTML = customer(look, 'happy');
+      guest.className = `guest-wrap ${pay.stars === 3 ? 'hop' : pay.stars === 2 ? 'nod' : ''}`;
+      guest.innerHTML = customer(look, mood);
+      guest.dataset.stars = String(pay.stars);
     }
-    setTimeout(() => this.sfx('happy'), 150);
+    setTimeout(() => this.sfx(pay.stars === 3 ? 'happy' : pay.stars === 2 ? 'good' : 'soft'), 150);
     this.showPayment(pay, before);
-    await wait(this.ms(1500));
+    await wait(this.ms(1600));
     if (guest) guest.className = 'guest-wrap leave';
     await wait(this.ms(450));
     $('#tray', this.o.root)?.classList.remove('served');
@@ -543,16 +785,17 @@ export class App {
   private showPayment(pay: Payment, before: number): void {
     const fx = $('#fx', this.o.root);
     if (fx) {
-      const hearts = Array.from({ length: 3 }, (_, i) => icon.heart(i < pay.hearts ? 'on' : 'off')).join('');
+      const stars = Array.from({ length: 3 }, (_, i) => icon.star(i < pay.stars ? 'on' : 'off')).join('');
       const pop = document.createElement('div');
-      pop.className = 'pay-pop';
-      pop.innerHTML = `<div class="hearts-row">${hearts}</div><div class="pay-amount">+${pay.total} ${icon.coin()}</div><div class="pay-tip">${icon.jar()}+${pay.tip}</div>`;
+      pop.className = `pay-pop stars-${pay.stars}`;
+      pop.dataset.stars = String(pay.stars);
+      pop.innerHTML = `<div class="stars-row">${stars}</div><div class="pay-amount">+${pay.total} ${icon.coin()}</div>${pay.tip ? `<div class="pay-tip">${icon.jar()}+${pay.tip}</div>` : ''}`;
       fx.appendChild(pop);
-      setTimeout(() => pop.remove(), 1600);
+      setTimeout(() => pop.remove(), 1700);
       if (!this.reduced) {
         const target = $('#coins', this.o.root)?.getBoundingClientRect();
         const origin = fx.getBoundingClientRect();
-        for (let i = 0; i < Math.min(8, 3 + Math.floor(pay.total / 4)); i++) {
+        for (let i = 0; i < Math.min(8, 2 + Math.floor(pay.total / 4)); i++) {
           const c = document.createElement('div');
           c.className = 'fly-coin';
           c.innerHTML = icon.coin();
@@ -570,7 +813,6 @@ export class App {
         }
       }
     }
-    // count up the coin pill
     const el = $('#coin-count', this.o.root);
     const after = this.p.coins;
     const steps = this.reduced ? 1 : 12;
@@ -609,7 +851,7 @@ export class App {
             <li>${icon.guest()}<span>${esc(t('served'))}</span><b>${s.served}</b></li>
             <li>${icon.coin()}<span>${esc(t('earnedBase'))}</span><b>${s.base}</b></li>
             <li>${icon.jar()}<span>${esc(t('earnedTips'))}</span><b>${s.tips}</b></li>
-            <li>${icon.heart()}<span>${esc(t('perfect'))}</span><b>${s.perfect}</b></li>
+            <li>${icon.star()}<span>${esc(t('perfect'))}</span><b>${s.perfect}</b></li>
           </ul>
           <div class="total">${icon.coin()}<span>${esc(t('total'))}</span><b id="day-total">+${s.earned * (this.lastSummaryDoubled ? 2 : 1)}</b></div>
         </section>
@@ -696,11 +938,12 @@ export class App {
     const p = this.p;
     if (this.shopTab === 'recipes') {
       const canReward = this.save.rewardUnlockDay !== p.day;
-      return RECIPES.map((r) => {
+      // fancy recipes still to unlock first, then the menu you already have
+      const sorted = [...RECIPES].sort((a, b) => Number(p.recipes.includes(a.id)) - Number(p.recipes.includes(b.id)) || a.cost - b.cost);
+      return sorted.map((r) => {
         const st = recipeStatus(p, r.id);
         let action: string;
         if (st === 'owned') action = `<span class="badge-owned">${icon.check()}</span>`;
-        else if (st === 'locked') action = `<span class="badge-locked">${icon.lock()}<span>${esc(t('fromDay', { n: r.day }))}</span></span>`;
         else {
           action = this.priceButton('recipe', r.id, r.cost, st === 'buyable');
           if (st === 'short' && canReward)
@@ -735,6 +978,7 @@ export class App {
     const p = this.p;
     if (kind === 'recipe') {
       if (buyRecipe(p, id)) {
+        this.preferNext = id;
         this.persist();
         this.renderShop();
         this.celebrateRecipe(id);
@@ -744,6 +988,7 @@ export class App {
       b.disabled = true;
       const ok = await this.o.platform.rewarded();
       if (ok && grantRecipe(p, id)) {
+        this.preferNext = id;
         this.save.rewardUnlockDay = p.day;
         this.persist();
         this.renderShop();

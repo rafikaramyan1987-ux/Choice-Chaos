@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { STARTER_RECIPES } from '../../src/core/recipes';
 import { SAVE_KEY, emptySave, loadSave, persist, resetProgress, sanitizeSave } from '../../src/platform/save';
 import { readJSON } from '../../src/platform/storage';
 
@@ -7,7 +8,8 @@ describe('save / load', () => {
     const s = emptySave();
     s.progress.coins = 123;
     s.progress.day = 4;
-    s.progress.recipes.push('juice');
+    s.progress.recipes.push('cake');
+    s.hints.push('hold');
     s.progress.equipment.oven = 1;
     s.progress.decor.push('plant');
     s.settings.muted = true;
@@ -21,15 +23,15 @@ describe('save / load', () => {
     expect(sanitizeSave('x')).toEqual(emptySave());
     expect(sanitizeSave({ version: 99 })).toEqual(emptySave());
   });
-  it('drops unknown ids, clamps numbers and always keeps the starter recipe', () => {
+  it('drops unknown ids, clamps numbers and always keeps the basic menu', () => {
     const s = sanitizeSave({
       version: 1,
-      progress: { day: -3, coins: 'lots', recipes: ['juice', 'pizza', 'juice'], equipment: { coffee: 9, oven: -1 }, decor: ['cat', 'ufo'] },
+      progress: { day: -3, coins: 'lots', recipes: ['juice', 'pizza', 'cake', 'cake'], equipment: { coffee: 9, oven: -1 }, decor: ['cat', 'ufo'] },
       settings: { lang: 'fr', muted: 'yes', vibration: false },
     });
     expect(s.progress.day).toBe(1);
     expect(s.progress.coins).toBe(0);
-    expect(s.progress.recipes).toEqual(['latte', 'juice']);
+    expect(s.progress.recipes).toEqual([...STARTER_RECIPES, 'cake']);
     expect(s.progress.equipment).toEqual({ coffee: 2, oven: 0, blender: 0 });
     expect(s.progress.decor).toEqual(['cat']);
     expect(s.settings).toEqual({ lang: 'fr', muted: false, vibration: false });

@@ -2,7 +2,7 @@
  * Soft synthesized sounds (WebAudio, no files). The AudioContext is only
  * created after the first user gesture, as browsers require.
  */
-export type Sfx = 'tap' | 'drop' | 'pour' | 'sizzle' | 'blend' | 'oops' | 'done' | 'bell' | 'coin' | 'happy' | 'unlock' | 'door' | 'day';
+export type Sfx = 'tap' | 'drop' | 'pour' | 'sizzle' | 'blend' | 'oops' | 'done' | 'bell' | 'coin' | 'happy' | 'unlock' | 'door' | 'day' | 'perfect' | 'good' | 'soft';
 
 type Note = [freq: number, dur: number, type: OscillatorType, gain?: number];
 
@@ -16,6 +16,9 @@ const NOTES: Partial<Record<Sfx, Note[]>> = {
   happy: [[523, 0.09, 'triangle'], [659, 0.09, 'triangle'], [784, 0.16, 'triangle']],
   unlock: [[523, 0.09, 'triangle'], [659, 0.09, 'triangle'], [784, 0.09, 'triangle'], [1046, 0.28, 'triangle']],
   door: [[1175, 0.18, 'sine', 0.05], [880, 0.3, 'sine', 0.05]],
+  perfect: [[784, 0.08, 'triangle'], [988, 0.08, 'triangle'], [1319, 0.2, 'triangle']],
+  good: [[659, 0.1, 'triangle'], [784, 0.16, 'triangle']],
+  soft: [[523, 0.14, 'sine', 0.06]],
   day: [[392, 0.18, 'triangle'], [523, 0.18, 'triangle'], [659, 0.18, 'triangle'], [784, 0.4, 'triangle']],
 };
 
@@ -104,6 +107,50 @@ export class Sound {
     src.connect(filter).connect(gain).connect(ctx.destination);
     src.start(at);
     src.stop(at + seconds + 0.05);
+  }
+
+  /** Starts a continuous texture (pouring, sizzling…) and returns a function that stops it. */
+  loop(kind: 'pour' | 'sizzle' | 'blend', volume = 1): () => void {
+    const ctx = this.ready();
+    if (!ctx) return () => {};
+    try {
+      const src = ctx.createBufferSource();
+      src.buffer = this.noiseBuffer(ctx);
+      src.loop = true;
+      const filter = ctx.createBiquadFilter();
+      const gain = ctx.createGain();
+      const at = ctx.currentTime;
+      const level = (kind === 'pour' ? 0.05 : kind === 'sizzle' ? 0.025 : 0.03) * volume;
+      if (kind === 'pour') {
+        filter.type = 'bandpass';
+        filter.frequency.setValueAtTime(450, at);
+        filter.frequency.linearRampToValueAtTime(1000, at + 2.6);
+        filter.Q.value = 1.2;
+      } else if (kind === 'sizzle') {
+        filter.type = 'highpass';
+        filter.frequency.value = 3500;
+      } else {
+        filter.type = 'lowpass';
+        filter.frequency.value = 700;
+      }
+      gain.gain.setValueAtTime(0.0001, at);
+      gain.gain.exponentialRampToValueAtTime(level, at + 0.06);
+      src.connect(filter).connect(gain).connect(ctx.destination);
+      src.start(at);
+      return () => {
+        try {
+          const now = ctx.currentTime;
+          gain.gain.cancelScheduledValues(now);
+          gain.gain.setValueAtTime(Math.max(0.0001, gain.gain.value), now);
+          gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.1);
+          src.stop(now + 0.15);
+        } catch {
+          /* already stopped */
+        }
+      };
+    } catch {
+      return () => {};
+    }
   }
 
   play(kind: Sfx, seconds = 0.4): void {

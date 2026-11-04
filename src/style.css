@@ -115,9 +115,6 @@ svg { display: block; width: 100%; height: 100%; }
   position: absolute; left: 50%; top: 6%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 2px;
   background: rgba(255,255,255,.95); border-radius: 18px; padding: 6px 14px; border: 3px solid var(--gold); animation: rise 1.6s ease both;
 }
-.hearts-row { display: flex; gap: 2px; }
-.hearts-row svg { width: 26px; height: 26px; }
-.hearts-row svg.off { filter: grayscale(1); opacity: .35; }
 .pay-amount { display: flex; align-items: center; gap: 4px; font-weight: 900; font-size: 1.5rem; color: #b5770f; }
 .pay-amount svg, .pay-tip svg { width: 24px; height: 24px; }
 .pay-tip { display: flex; align-items: center; gap: 4px; font-weight: 800; font-size: .95rem; }
@@ -150,15 +147,49 @@ svg { display: block; width: 100%; height: 100%; }
   position: absolute; top: 0; left: 50%; transform: translateX(-50%); background: #fff; border: 3px solid var(--rose); border-radius: 14px;
   padding: 2px 10px; font-weight: 900; animation: rise .9s ease both; white-space: nowrap;
 }
-.pour { position: absolute; top: -6px; left: 50%; width: 10px; height: 0; border-radius: 6px; background: var(--pour, #fff); transform: translateX(-50%); opacity: 0; }
-.work.fx-pour .pour { animation: pour .38s ease both; }
-.machine-ring { position: absolute; inset: 4px; border-radius: 50%; opacity: 0; }
-.work.working .machine-ring {
-  opacity: 1; background: conic-gradient(var(--gold) calc(var(--p) * 1%), transparent 0);
-  -webkit-mask: radial-gradient(circle, transparent 66%, #000 67%); mask: radial-gradient(circle, transparent 66%, #000 67%);
-  animation: ring var(--dur, 1s) linear both;
+.pour { position: absolute; top: -10px; left: 52%; width: 9px; height: 0; border-radius: 6px; background: var(--pour, #fff); transform: translateX(-50%); opacity: 0; transition: height .15s, opacity .15s; }
+.work.pouring .pour { height: 46%; opacity: 1; animation: stream .25s linear infinite alternate; }
+.work.sprinkling .work-item { animation: sizzle .18s linear infinite; }
+
+/* gauge: fill line with a clearly visible green target zone */
+.gauge {
+  position: absolute; left: -8px; top: 6%; bottom: 6%; width: 26px; border-radius: 14px; background: #fff;
+  border: 3px solid #e9b98c; overflow: hidden; box-shadow: inset 0 2px 0 rgba(0,0,0,.06);
 }
-@property --p { syntax: '<number>'; inherits: false; initial-value: 0; }
+.gauge.hidden { display: none; }
+.gauge-ok { position: absolute; left: 0; right: 0; background: #fff1b8; }
+.gauge-zone { position: absolute; left: 0; right: 0; background: #5ccf72; box-shadow: inset 0 0 0 2px #3fae57; }
+.gauge-fill { position: absolute; left: 4px; right: 4px; bottom: 0; height: 0; border-radius: 8px; background: rgba(79,143,217,.55); }
+.gauge.act-timing .gauge-fill { background: rgba(255,138,61,.55); }
+.gauge-mark { position: absolute; left: -2px; right: -2px; height: 5px; margin-bottom: -2px; background: #5a3a2c; border-radius: 3px; }
+.gauge.in-zone { border-color: #3fae57; }
+.gauge.in-zone .gauge-mark { background: #1f7a35; }
+.ing.holding { border-color: #4f8fd9; background: #eef5ff; transform: scale(.96); }
+.ing.act-timing::after, .ing.act-pour::before, .ing.act-topping::before {
+  content: ''; position: absolute; right: 5px; top: 5px; width: 9px; height: 9px; border-radius: 50%;
+}
+.ing.act-timing::after { background: #ff8a3d; border: 2px solid #d9632a; }
+.ing.act-pour::before, .ing.act-topping::before { background: #5ccf72; border: 2px solid #3fae57; }
+.quality { position: absolute; top: -4px; left: 50%; transform: translateX(-50%); display: flex; gap: 2px; animation: rise .9s ease both; pointer-events: none; }
+.quality svg { width: 26px; height: 26px; }
+.quality svg.off, .stars-row svg.off { filter: grayscale(1); opacity: .3; }
+.stars-row { display: flex; gap: 2px; }
+.stars-row svg { width: 30px; height: 30px; }
+.size-badge {
+  position: absolute; left: -4px; top: -4px; min-width: 22px; height: 22px; border-radius: 11px; background: #5a3a2c; color: #fff;
+  font-weight: 900; font-size: .8rem; display: grid; place-items: center; padding: 0 5px; border: 2px solid #fff;
+}
+.size-badge.size-L { background: #d9632a; }
+.size-badge.size-S { background: #4f8fd9; }
+
+/* first-time hand hint */
+.station { position: relative; }
+.hand-hint { position: absolute; width: 48px; height: 48px; pointer-events: none; z-index: 5; filter: drop-shadow(0 3px 3px rgba(0,0,0,.25)); }
+.hand-hint.hidden { display: none; }
+.hand-hint.show-tap { animation: hand-tap 1s ease-in-out infinite; }
+.hand-hint.show-hold { animation: hand-hold 2s ease-in-out infinite; }
+.hand-hint.show-timing { animation: hand-tap .7s ease-in-out infinite; }
+.guest-wrap.nod .guest-head { animation: tilt .6s ease; transform-origin: 50% 80%; }
 .work.fx-sizzle .work-item { animation: sizzle .12s linear infinite; }
 .work.fx-blend .work-item { animation: shake .08s linear infinite; }
 .work.fx-pour.working .work-item { animation: none; }
@@ -178,9 +209,6 @@ svg { display: block; width: 100%; height: 100%; }
 .ing {
   aspect-ratio: 1; min-height: 60px; max-height: 92px; border-radius: 18px; border: 3px solid #f0c9a0; background: #fff; padding: 6px; cursor: pointer;
   box-shadow: 0 4px 0 #f0c9a0; position: relative; touch-action: none;
-}
-.ing.machine::after {
-  content: ''; position: absolute; right: 4px; top: 4px; width: 10px; height: 10px; border-radius: 50%; background: var(--gold); border: 2px solid #c98f1a;
 }
 .ing:disabled { opacity: .55; cursor: default; }
 .ing.hint { border-color: var(--gold); box-shadow: 0 4px 0 #c98f1a, 0 0 0 4px #fff0b3; animation: bounce-hint 1s ease-in-out infinite; }
@@ -310,7 +338,9 @@ svg { display: block; width: 100%; height: 100%; }
 @keyframes fly { 0% { transform: translate(0, 0) scale(.6); opacity: 0; } 20% { opacity: 1; transform: translate(0, -20px) scale(1); } 100% { transform: translate(var(--tx, 0), var(--ty, -200px)) scale(.7); opacity: .3; } }
 @keyframes wiggle { 20% { transform: translateX(-6px) rotate(-4deg); } 40% { transform: translateX(6px) rotate(4deg); } 60% { transform: translateX(-4px); } 80% { transform: translateX(3px); } }
 @keyframes pour { 0% { height: 0; opacity: 1; } 60% { height: 55%; opacity: 1; } 100% { height: 55%; opacity: 0; } }
-@keyframes ring { from { --p: 0; } to { --p: 100; } }
+@keyframes stream { to { width: 11px; } }
+@keyframes hand-tap { 50% { transform: translateY(8px) scale(.92); } }
+@keyframes hand-hold { 0% { transform: translateY(0); } 20%, 80% { transform: translateY(8px) scale(.9); } 100% { transform: translateY(0); } }
 @keyframes sizzle { 50% { transform: translateY(-1px); } }
 @keyframes shake { 25% { transform: translateX(-2px); } 75% { transform: translateX(2px); } }
 @keyframes to-tray { to { transform: translate(60%, -10%) scale(.35); opacity: 0; } }
@@ -326,7 +356,6 @@ svg { display: block; width: 100%; height: 100%; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
-  .work.working .machine-ring { animation-duration: var(--dur, 1s) !important; }
 }
 
 @media (max-height: 640px) {

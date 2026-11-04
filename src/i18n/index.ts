@@ -8,6 +8,10 @@ export interface Locale {
   ingredients: Record<string, string>;
   machines: Record<string, string>;
   decor: Record<string, string>;
+  achievements: Record<string, string>;
+  expansions: Record<string, string>;
+  expansionInfo: Record<string, string>;
+  guests: Record<string, string>;
 }
 
 /**
@@ -43,7 +47,7 @@ export function t(key: string, vars: Record<string, string | number> = {}): stri
   return template.replace(/\{(\w+)\}/g, (_, k: string) => String(vars[k] ?? `{${k}}`));
 }
 
-type Section = 'recipes' | 'ingredients' | 'machines' | 'decor';
+type Section = 'recipes' | 'ingredients' | 'machines' | 'decor' | 'achievements' | 'expansions' | 'expansionInfo' | 'guests';
 export function name(section: Section, id: string): string {
   return current[section][id] ?? fallback()[section][id] ?? id;
 }

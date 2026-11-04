@@ -1,5 +1,19 @@
 import { expect, test, type Page } from '@playwright/test';
 
+/** The daily reward calendar opens on the first visit of the day. */
+async function claimDaily(page: Page): Promise<void> {
+  const claim = page.locator('.login-modal [data-a="claim"]');
+  await expect(claim).toBeVisible();
+  await claim.click();
+  await expect(page.locator('.login-modal')).toHaveCount(0);
+}
+
+/** Closes level-up chests that may open between guests. */
+async function closeLevelUps(page: Page): Promise<void> {
+  const ok = page.locator('.level-modal [data-a="ok"]');
+  if (await ok.count()) await ok.click();
+}
+
 /** Waits until either the order can be served or the next ingredient button is usable. */
 async function waitReady(page: Page): Promise<void> {
   await page.waitForFunction(() => {
@@ -56,9 +70,13 @@ test.describe('Cozy Café smoke (390px)', () => {
     });
 
     await page.goto('/?seed=12345');
+    await claimDaily(page);
     await expect(page.getByRole('button', { name: /Open the café|Ouvrir le café/ })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
-    await expect(page.locator('#coin-count')).toHaveText('0');
+    // 3 missions with progress bars on the café screen
+    await expect(page.locator('.missions .mission')).toHaveCount(3);
+    const start = Number(await page.locator('#coin-count').textContent());
+    expect(start).toBeGreaterThan(0); // daily reward
 
     await page.locator('#play').click();
     await expect(page.locator('#bubble .order-item')).toHaveCount(1);
@@ -79,15 +97,17 @@ test.describe('Cozy Café smoke (390px)', () => {
     // released in the green zone every time → 3 stars, happy guest
     await expect(page.locator('.pay-pop')).toHaveAttribute('data-stars', '3');
     await expect(page.locator('#guest')).toHaveAttribute('data-stars', '3');
-    await expect.poll(async () => Number(await page.locator('#coin-count').textContent()), { timeout: 5000 }).toBeGreaterThan(3);
+    await expect.poll(async () => Number(await page.locator('#coin-count').textContent()), { timeout: 5000 }).toBeGreaterThan(start + 3);
 
     // next customer arrives with a different order; no game over
-    await expect(page.locator('#dots i.done')).toHaveCount(1, { timeout: 5000 });
+    await expect(page.locator('#dots i.done')).toHaveCount(1, { timeout: 8000 });
+    await closeLevelUps(page);
     expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
 
     // progress is saved
     const coins = Number(await page.locator('#coin-count').textContent());
     await page.reload();
+    await expect(page.locator('.login-modal')).toHaveCount(0); // already claimed today
     await expect(page.locator('#coin-count')).toHaveText(String(coins));
 
     expect(errors).toEqual([]);
@@ -96,6 +116,7 @@ test.describe('Cozy Café smoke (390px)', () => {
 
   test('releasing far from the green zone still pays (fewer stars, never angry)', async ({ page }) => {
     await page.goto('/?seed=777');
+    await claimDaily(page);
     await page.locator('#play').click();
     await expect(page.locator('#bubble')).not.toHaveClass(/hidden/);
     for (let guard = 0; guard < 40; guard++) {
@@ -111,26 +132,52 @@ test.describe('Cozy Café smoke (390px)', () => {
         await page.locator('#work').click({ force: true }); // stopped far too early
       } else await btn.click(); // a quick tap instead of holding
     }
+    const before = Number(await page.locator('#coin-count').textContent());
     await page.locator('#serve').click();
-    await expect.poll(async () => Number(await page.locator('#coin-count').textContent()), { timeout: 5000 }).toBeGreaterThan(0);
+    await expect.poll(async () => Number(await page.locator('#coin-count').textContent()), { timeout: 5000 }).toBeGreaterThan(before);
     const stars = Number(await page.locator('#guest').getAttribute('data-stars'));
     expect(stars).toBeGreaterThanOrEqual(1);
+    if (stars < 3) {
+      // optional rewarded video to make it 3★ (granted directly without the SDK)
+      await page.locator('#redo-ad').click();
+      await expect(page.locator('#guest')).toHaveAttribute('data-stars', '3');
+    }
   });
 
   test('language can be switched to French and is remembered', async ({ page }) => {
     await page.goto('/');
+    await claimDaily(page);
     await page.getByRole('button', { name: 'Français' }).click();
     await expect(page.getByRole('button', { name: /Ouvrir le café/ })).toBeVisible();
     await page.reload();
     await expect(page.getByRole('button', { name: /Ouvrir le café/ })).toBeVisible();
   });
 
-  test('shop opens with recipes, equipment and decor', async ({ page }) => {
+  test('shop opens with recipes, equipment, decor and café expansions', async ({ page }) => {
     await page.goto('/');
+    await claimDaily(page);
     await page.locator('#shop').click();
     await expect(page.locator('.card')).toHaveCount(14);
     await page.locator('[data-tab="decor"]').click();
     await expect(page.locator('.decor-preview')).toBeVisible();
+    await page.locator('[data-tab="cafe"]').click();
+    await expect(page.locator('[data-expansion]')).toHaveCount(11);
+    await page.locator('#back').click();
+    await expect(page.locator('#play')).toBeVisible();
+  });
+
+  test('gift box (×2 with video), sticker book and achievements', async ({ page }) => {
+    await page.goto('/');
+    await claimDaily(page);
+    const before = Number(await page.locator('#coin-count').textContent());
+    await page.locator('#gift').click();
+    await page.locator('.gift-modal [data-a="x2"]').click();
+    await expect.poll(async () => Number(await page.locator('#coin-count').textContent())).toBeGreaterThan(before);
+    await expect(page.locator('#gift')).not.toHaveClass(/ready/); // next one in 15 minutes
+    await page.locator('#book').click();
+    await expect(page.locator('[data-sticker]')).toHaveCount(11);
+    await page.locator('[data-book="achievements"]').click();
+    await expect(page.locator('[data-achievement]').first()).toBeVisible();
     await page.locator('#back').click();
     await expect(page.locator('#play')).toBeVisible();
   });

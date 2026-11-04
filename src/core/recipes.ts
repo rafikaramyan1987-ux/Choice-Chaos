@@ -83,37 +83,37 @@ export interface Recipe {
   sized: boolean;
   /** Base price (size M). */
   price: number;
-  /** 0 = on the menu from the start; otherwise coins to unlock this fancy recipe. */
-  cost: number;
+  /** Player level that unlocks it (1 = on the menu from the start). */
+  level: number;
 }
 
-const r = (id: string, station: Station, steps: string[], optional: string[], price: number, cost = 0, sized = false): Recipe => ({
+const r = (id: string, station: Station, steps: string[], optional: string[], price: number, level = 1, sized = false): Recipe => ({
   id,
   station,
   steps,
   optional,
   sized,
   price,
-  cost,
+  level,
 });
 
 export const RECIPES: Recipe[] = [
   // basic menu (available from the first customer)
-  r('coffee', 'hot', ['cup', 'coffee', 'milk', 'sugar'], ['milk', 'sugar'], 4, 0, true),
-  r('latte', 'hot', ['cup', 'coffee', 'milk', 'foam', 'sugar'], ['sugar'], 6, 0, true),
-  r('cocoa', 'hot', ['cup', 'cocoa', 'milk', 'marshmallow', 'cream'], ['marshmallow', 'cream'], 6, 0, true),
-  r('juice', 'cold', ['glass', 'orange', 'ice'], ['ice'], 4, 0, true),
+  r('coffee', 'hot', ['cup', 'coffee', 'milk', 'sugar'], ['milk', 'sugar'], 4, 1, true),
+  r('latte', 'hot', ['cup', 'coffee', 'milk', 'foam', 'sugar'], ['sugar'], 6, 1, true),
+  r('cocoa', 'hot', ['cup', 'cocoa', 'milk', 'marshmallow', 'cream'], ['marshmallow', 'cream'], 6, 1, true),
+  r('juice', 'cold', ['glass', 'orange', 'ice'], ['ice'], 4, 1, true),
   r('croissant', 'pastry', ['plate', 'croissant', 'warm', 'choco'], ['choco'], 4),
   r('toastie', 'grill', ['bread', 'ham', 'cheese', 'tomato', 'toast'], ['ham', 'tomato'], 6),
   r('crepe_choco', 'crepe', ['batter', 'cook', 'choco', 'banana', 'cream'], ['banana', 'cream'], 6),
-  // fancy recipes (unlocked with coins)
-  r('cake', 'pastry', ['plate', 'cake', 'cream', 'cherry'], ['cream'], 8, 60),
-  r('cone', 'icecream', ['cone', 'vanilla', 'sprinkles', 'choco'], ['sprinkles', 'choco'], 6, 80),
-  r('veggie', 'grill', ['bread', 'lettuce', 'tomato', 'cheese', 'toast'], ['cheese'], 8, 90),
-  r('smoothie_berry', 'cold', ['glass', 'berries', 'banana', 'yogurt', 'blend', 'ice'], ['ice'], 9, 110, true),
-  r('crepe_berry', 'crepe', ['batter', 'cook', 'berries', 'cream'], ['cream'], 8, 130),
-  r('sundae', 'icecream', ['bowl', 'strawberry', 'vanilla', 'choco', 'sprinkles', 'cherry'], ['choco', 'sprinkles'], 10, 150),
-  r('smoothie_mango', 'cold', ['glass', 'mango', 'orange', 'yogurt', 'blend'], [], 10, 170, true),
+  // fancy recipes (unlocked by player level, or early with gems / a rewarded video)
+  r('cake', 'pastry', ['plate', 'cake', 'cream', 'cherry'], ['cream'], 8, 2),
+  r('cone', 'icecream', ['cone', 'vanilla', 'sprinkles', 'choco'], ['sprinkles', 'choco'], 6, 4),
+  r('veggie', 'grill', ['bread', 'lettuce', 'tomato', 'cheese', 'toast'], ['cheese'], 8, 6),
+  r('smoothie_berry', 'cold', ['glass', 'berries', 'banana', 'yogurt', 'blend', 'ice'], ['ice'], 9, 7, true),
+  r('crepe_berry', 'crepe', ['batter', 'cook', 'berries', 'cream'], ['cream'], 8, 9),
+  r('sundae', 'icecream', ['bowl', 'strawberry', 'vanilla', 'choco', 'sprinkles', 'cherry'], ['choco', 'sprinkles'], 10, 10),
+  r('smoothie_mango', 'cold', ['glass', 'mango', 'orange', 'yogurt', 'blend'], [], 10, 12, true),
 ];
 
 export const RECIPE_BY_ID: Record<string, Recipe> = Object.fromEntries(RECIPES.map((x) => [x.id, x]));
@@ -125,7 +125,12 @@ export function getRecipe(id: string): Recipe {
 }
 
 /** Recipes on the menu from the very first customer. */
-export const STARTER_RECIPES = RECIPES.filter((x) => x.cost === 0).map((x) => x.id);
+export const STARTER_RECIPES = RECIPES.filter((x) => x.level <= 1).map((x) => x.id);
+
+/** Gems to unlock a fancy recipe before its level. */
+export function recipeGemCost(id: string): number {
+  return 4 + getRecipe(id).level;
+}
 
 export const SIZES: Size[] = ['S', 'M', 'L'];
 export const SIZE_PRICE: Record<Size, number> = { S: 0.8, M: 1, L: 1.3 };
@@ -150,7 +155,10 @@ export function machineDuration(level: number): number {
 
 export interface Decor {
   id: string;
+  /** Coin price (0 for premium decor). */
   cost: number;
+  /** Gem price for premium decor. */
+  gems?: number;
 }
 export const DECOR: Decor[] = [
   { id: 'plant', cost: 40 },
@@ -160,6 +168,10 @@ export const DECOR: Decor[] = [
   { id: 'clock', cost: 110 },
   { id: 'shelf', cost: 140 },
   { id: 'cat', cost: 200 },
+  // premium (gems)
+  { id: 'chandelier', cost: 0, gems: 12 },
+  { id: 'aquarium', cost: 0, gems: 18 },
+  { id: 'fireplace', cost: 0, gems: 25 },
 ];
 export const DECOR_BY_ID: Record<string, Decor> = Object.fromEntries(DECOR.map((d) => [d.id, d]));
 

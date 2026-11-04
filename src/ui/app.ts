@@ -3,7 +3,7 @@ import {
   OK_MARGIN,
   buyDecor,
   buyEquipment,
-  buyRecipe,
+  buyRecipeWithGems,
   checkStep,
   equipmentCost,
   grantRecipe,
@@ -13,16 +13,72 @@ import {
   machineOf,
   recipeStatus,
   zoneWidth,
+  type Order,
   type Payment,
+  type PayMods,
   type Quality,
 } from '../core/game';
-import { DECOR, INGREDIENTS, MACHINES, MAX_EQUIPMENT_LEVEL, RECIPES, actionOf, getRecipe, machineDuration, stationIngredients } from '../core/recipes';
-import { mulberry32, randomSeed } from '../core/rng';
+import {
+  ACHIEVEMENTS,
+  CHALLENGE_GUESTS,
+  CHALLENGE_STARS,
+  EXPANSIONS,
+  LOGIN_REWARDS,
+  REROLL_GEMS,
+  STICKERS,
+  CUSTOMER_LEVEL,
+  cafeEffects,
+  canUseAd,
+  challengeAvailable,
+  challengeSeed,
+  claimDayChest,
+  claimGift,
+  claimLogin,
+  dayChest,
+  expansionStatus,
+  fillMissions,
+  finishBuild,
+  finishChallenge,
+  giftReady,
+  guestOptions,
+  localDate,
+  loginAvailable,
+  loginDayIndex,
+  nextLockedRecipe,
+  onServed,
+  rerollMission,
+  settleBuilds,
+  skipCost,
+  startBuild,
+  startDayMeta,
+  useAd,
+  xpToNext,
+  type Mission,
+  type Reward,
+  type RewardEvent,
+  type Unlock,
+} from '../core/meta';
+import { DECOR, INGREDIENTS, MACHINES, MAX_EQUIPMENT_LEVEL, RECIPES, actionOf, getRecipe, machineDuration, recipeGemCost, stationIngredients } from '../core/recipes';
+import { mulberry32, randomSeed, type Rng } from '../core/rng';
 import { GameplayTracker, MidgameThrottle, midgameAllowed, type Platform } from '../platform/ads';
 import { vibrate, type Sound } from '../platform/audio';
 import { loadSave, persist, resetProgress, type SaveData } from '../platform/save';
 import { LOCALES, detectLanguage, name, setLanguage, t } from '../i18n';
-import { cafeBackground, counter, customer, decorIcon, drawItem, icon, ingredientIcon, machineIcon, recipeIcon, type Mood } from './art';
+import {
+  cafeBackground,
+  counter,
+  customer,
+  decorIcon,
+  drawItem,
+  expansionIcon,
+  icon,
+  ingredientIcon,
+  machineIcon,
+  recipeIcon,
+  type GuestKind,
+  type GuestSpecial,
+  type Mood,
+} from './art';
 import { $, esc, prefersReducedMotion, Stopwatch, wait } from './dom';
 
 export interface AppOptions {
@@ -32,7 +88,8 @@ export interface AppOptions {
   seed?: number;
 }
 
-type ShopTab = 'recipes' | 'equipment' | 'decor';
+type ShopTab = 'recipes' | 'equipment' | 'decor' | 'cafe';
+type BookTab = 'stickers' | 'achievements';
 
 interface ActiveAction {
   id: string;
@@ -70,6 +127,12 @@ function hintKind(id: string): 'tap' | 'hold' | 'timing' {
   return a === 'tap' ? 'tap' : a === 'timing' ? 'timing' : 'hold';
 }
 
+
+const fmtTime = (ms: number) => {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  return s >= 3600 ? `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
+
 export class App {
   private save: SaveData;
   private readonly gameplay: GameplayTracker;
@@ -77,24 +140,36 @@ export class App {
   private readonly watch = new Stopwatch();
   private readonly reduced = prefersReducedMotion();
   private seed: number;
+  private readonly rng: Rng;
   private run: DayRun | null = null;
   private busy = false;
   private hintTimer = 0;
+  private ticker = 0;
   private lastSummaryDoubled = false;
+  private dayChestEvents: RewardEvent[] = [];
   private shopTab: ShopTab = 'recipes';
-  private shopReturn: () => void = () => this.renderTitle();
+  private bookTab: BookTab = 'stickers';
+  private shopReturn: () => void = () => this.renderHub();
   private suppressClick = false;
   private action: ActiveAction | null = null;
   /** A fancy recipe just unlocked: the first guest of the next day asks for it. */
   private preferNext: string | null = null;
+  /** "Call a VIP" reward: the first guest of the next day is a VIP. */
+  private vipNext = false;
+  /** Playing the daily challenge instead of a normal day. */
+  private challenge = false;
+  private challengeResult: RewardEvent[] | null = null;
 
   constructor(private readonly o: AppOptions) {
     this.save = loadSave();
     this.gameplay = new GameplayTracker(o.platform);
     this.seed = o.seed ?? randomSeed();
+    this.rng = mulberry32(this.seed ^ 0x51ed);
     const lang = this.save.settings.lang ?? detectLanguage(typeof navigator !== 'undefined' ? navigator.languages : undefined);
     setLanguage(lang);
     o.sound.setMuted(this.save.settings.muted);
+    fillMissions(this.save.meta, this.p, this.rng);
+    persist(this.save);
     // first gesture unlocks audio
     const unlock = () => o.sound.unlock();
     o.root.addEventListener('pointerdown', unlock);
@@ -102,13 +177,22 @@ export class App {
   }
 
   start(): void {
-    this.renderTitle();
+    this.renderHub();
   }
 
   // ------------------------------------------------------------------ helpers
 
   private get p() {
     return this.save.progress;
+  }
+
+  private today(): string {
+    return localDate();
+  }
+
+  /** Decorations + finished expansions, drawn in the café. */
+  private features(): string[] {
+    return [...this.p.decor, ...cafeEffects(this.save.meta, Date.now()).built];
   }
 
   private ms(n: number): number {
@@ -127,17 +211,43 @@ export class App {
     persist(this.save);
   }
 
-  private toast(text: string): void {
+  /** Small non-blocking notice at the top (stacked). */
+  private toast(text: string, pic = '', extra = ''): void {
+    let stack = $('.toasts', this.o.root);
+    if (!stack) {
+      stack = document.createElement('div');
+      stack.className = 'toasts';
+      stack.setAttribute('role', 'status');
+      this.o.root.appendChild(stack);
+    }
     const el = document.createElement('div');
     el.className = 'toast';
-    el.setAttribute('role', 'status');
-    el.textContent = text;
-    this.o.root.appendChild(el);
-    setTimeout(() => el.remove(), 2600);
+    el.innerHTML = `${pic ? `<span class="toast-pic">${pic}</span>` : ''}<span>${esc(text)}</span>${extra ? `<span class="reward-chips">${extra}</span>` : ''}`;
+    stack.appendChild(el);
+    setTimeout(() => el.remove(), 2800);
   }
 
   private coinPill(): string {
     return `<div class="pill coins" id="coins" aria-label="${esc(t('coins'))}">${icon.coin()}<span id="coin-count">${this.p.coins}</span></div>`;
+  }
+
+  private gemPill(): string {
+    return `<div class="pill gems" id="gems" aria-label="${esc(t('gems'))}">${icon.gem()}<span id="gem-count">${this.p.gems}</span></div>`;
+  }
+
+  private updateWallet(): void {
+    const c = $('#coin-count', this.o.root);
+    if (c) c.textContent = String(this.p.coins);
+    const g = $('#gem-count', this.o.root);
+    if (g) g.textContent = String(this.p.gems);
+    const lv = $('#level', this.o.root);
+    if (lv) lv.outerHTML = this.levelPill();
+  }
+
+  private levelPill(): string {
+    const m = this.save.meta;
+    const pct = Math.round((m.xp / xpToNext(m.level)) * 100);
+    return `<div class="pill level" id="level" aria-label="${esc(t('level', { n: m.level }))}"><span class="lv">${m.level}</span><span class="xp"><i style="width:${pct}%"></i></span></div>`;
   }
 
   private muteButton(): string {
@@ -159,39 +269,113 @@ export class App {
     });
   }
 
-  private celebrateRecipe(id: string): void {
-    this.o.platform.happytime();
-    this.sfx('unlock');
-    this.buzz([20, 40, 20]);
-    const el = document.createElement('div');
-    el.className = 'unlock-pop';
-    el.setAttribute('role', 'status');
-    el.innerHTML = `<div class="unlock-card"><div class="unlock-pic">${recipeIcon(getRecipe(id).steps)}</div><strong>${esc(t('newRecipe'))}</strong><span>${esc(name('recipes', id))}</span></div>`;
-    this.o.root.appendChild(el);
-    el.addEventListener('click', () => el.remove());
-    setTimeout(() => el.remove(), this.reduced ? 1800 : 2400);
+  private chips(r: Reward): string {
+    return [
+      r.coins ? `<span class="chip-r">${icon.coin()}${r.coins}</span>` : '',
+      r.gems ? `<span class="chip-r">${icon.gem()}${r.gems}</span>` : '',
+      r.xp ? `<span class="chip-r xp">XP ${r.xp}</span>` : '',
+    ].join('');
   }
 
-  // ------------------------------------------------------------------ title
+  /** Opens a modal and resolves with the data-a of the pressed button ('' when closed). */
+  private modal(inner: string, cls = ''): Promise<string> {
+    return new Promise((resolve) => {
+      const el = document.createElement('div');
+      el.className = `modal ${cls}`;
+      el.innerHTML = `<div class="modal-card" role="dialog" aria-modal="true">${inner}</div>`;
+      this.o.root.appendChild(el);
+      (el.querySelector('[data-a]') as HTMLElement | null)?.focus();
+      el.addEventListener('click', (e) => {
+        const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-a]');
+        if (!btn && e.target !== el) return;
+        if (btn?.disabled) return;
+        el.remove();
+        resolve(btn?.dataset.a ?? '');
+      });
+    });
+  }
 
-  private renderTitle(): void {
+  private unlockPic(u: Unlock): string {
+    if (u.type === 'recipe') return recipeIcon(getRecipe(u.id).steps);
+    if (u.type === 'customer') return this.guestPic(u.id);
+    return expansionIcon(u.id);
+  }
+
+  private guestPic(id: string): string {
+    const special = ['vip', 'critic', 'celebrity'].includes(id) ? (id as GuestSpecial) : null;
+    return customer(7, 'happy', special ? 'bear' : (id as GuestKind), special);
+  }
+
+  /** Mission/achievement/sticker toasts; level-ups open a chest. */
+  private async showRewards(events: RewardEvent[]): Promise<void> {
+    for (const e of events) {
+      if (e.source === 'mission') {
+        this.sfx('perfect');
+        this.toast(t('missionDone'), icon.missions(), this.chips({ coins: e.reward.coins, gems: e.reward.gems }));
+      } else if (e.source === 'achievement') {
+        this.sfx('unlock');
+        this.toast(`${t('achievement')} ${name('achievements', e.id)}`, icon.trophy(), this.chips(e.reward));
+      } else if (e.source === 'sticker') {
+        this.toast(`${t('newSticker')} ${name('guests', e.id)}`, this.guestPic(e.id), this.chips(e.reward));
+      } else if (e.source === 'build') {
+        this.sfx('unlock');
+        this.toast(t('isReady', { name: name('expansions', e.id) }), icon.hammer());
+      }
+    }
+    this.updateWallet();
+    for (const e of events.filter((x) => x.source === 'level')) await this.levelUp(e);
+  }
+
+  private async levelUp(e: RewardEvent): Promise<void> {
+    this.o.platform.happytime();
+    this.sfx('day');
+    this.buzz([30, 50, 30]);
+    const unlocks = (e.unlocks ?? [])
+      .map((u) => {
+        const label = u.type === 'recipe' ? t('newRecipe') : u.type === 'customer' ? t('newGuest') : t('newArea');
+        const nm = u.type === 'recipe' ? name('recipes', u.id) : u.type === 'customer' ? name('guests', u.id) : name('expansions', u.id);
+        return `<div class="unlock-row"><div class="unlock-mini">${this.unlockPic(u)}</div><div><small>${esc(label)}</small><b>${esc(nm)}</b></div></div>`;
+      })
+      .join('');
+    await this.modal(
+      `<div class="chest">${icon.gift()}</div><h2>${esc(t('levelUp', { n: e.id }))}</h2><div class="reward-chips">${this.chips(e.reward)}</div>${unlocks}<button class="btn primary" data-a="ok">${icon.check()}<span>OK</span></button>`,
+      'level-modal',
+    );
+    this.updateWallet();
+  }
+
+  // ------------------------------------------------------------------ hub (café screen)
+
+  private renderHub(): void {
     this.gameplay.stop();
-    const guest = customer(this.seed, 'happy');
+    clearInterval(this.ticker);
+    const meta = this.save.meta;
+    const today = this.today();
+    const events = settleBuilds(meta, this.p, Date.now());
+    fillMissions(meta, this.p, this.rng);
+    this.persist();
+    const giftOk = giftReady(meta, Date.now());
+    const chOk = challengeAvailable(meta, today);
+    const vipOk = meta.level >= CUSTOMER_LEVEL.vip && canUseAd(meta, 'vip', today) && !this.vipNext;
     this.o.root.innerHTML = `
-      <div class="screen title-screen">
-        <header class="hud"><div class="pill">${icon.sun()}<span>${esc(t('day', { n: this.p.day }))}</span></div>${this.coinPill()}${this.muteButton()}</header>
+      <div class="screen hub-screen">
+        <header class="hud">${this.levelPill()}${this.coinPill()}${this.gemPill()}${this.muteButton()}</header>
         <section class="scene title-scene">
-          ${cafeBackground(this.p.decor)}
-          <div class="guest-wrap wave">${guest}</div>
+          ${cafeBackground(this.features())}
+          <div class="guest-wrap wave">${customer(this.seed, 'happy')}</div>
           <div class="counter-wrap">${counter(this.p.decor)}</div>
-          <div class="counter-items">${recipeIcon(getRecipe('latte').steps)}${this.p.recipes.includes('croissant') ? recipeIcon(getRecipe('croissant').steps) : ''}</div>
+          <div class="counter-items">${recipeIcon(getRecipe('latte').steps)}${recipeIcon(getRecipe('croissant').steps)}</div>
+          <div class="hub-logo"><span class="logo-cup">${icon.recipes()}</span><h1>${esc(t('title'))}</h1></div>
         </section>
-        <div class="logo"><span class="logo-cup">${icon.recipes()}</span><h1>${esc(t('title'))}</h1></div>
-        <p class="tagline">${esc(t('tagline'))}</p>
-        <div class="menu">
-          <button class="btn primary big" id="play">${icon.play()}<span>${esc(t('play'))}</span></button>
-          <button class="btn" id="shop">${icon.shop()}<span>${esc(t('shop'))}</span></button>
+        <button class="btn primary big" id="play">${icon.play()}<span>${esc(t('play'))}</span><small>${esc(t('day', { n: this.p.day }))}</small></button>
+        <div class="tiles">
+          <button class="tile ${giftOk ? 'ready' : ''}" id="gift">${icon.gift()}<span id="gift-label">${giftOk ? esc(t('giftReady')) : fmtTime(meta.giftAt - Date.now())}</span></button>
+          <button class="tile ${chOk ? 'ready' : 'done'}" id="challenge">${icon.calendar()}<span>${esc(chOk ? t('challenge') : t('challengeDoneToday'))}</span></button>
+          <button class="tile ad ${vipOk ? '' : 'off'}" id="vip" ${vipOk ? '' : 'disabled'}>${icon.crown()}<span>${esc(this.vipNext ? '✓' : t('callVip'))}</span>${vipOk ? `<i class="ad-badge">${icon.video()}</i>` : ''}</button>
+          <button class="tile" id="book">${icon.book()}<span>${esc(t('book'))}</span></button>
+          <button class="tile" id="shop">${icon.shop()}<span>${esc(t('shop'))}</span></button>
         </div>
+        ${this.missionsCard()}
         <div class="settings" role="group" aria-label="${esc(t('settings'))}">
           <button class="chip" id="vib" aria-pressed="${this.save.settings.vibration}" aria-label="${esc(t('vibration'))}">${icon.vibrate()}<span>${this.save.settings.vibration ? 'ON' : 'OFF'}</span></button>
           ${Object.entries(LOCALES)
@@ -201,20 +385,29 @@ export class App {
         </div>
       </div>`;
     this.bindMute();
+    this.bindMissions(() => this.renderHub());
     $('#play', this.o.root)?.addEventListener('click', () => {
       this.sfx('tap');
+      this.challenge = false;
       void this.startDay();
     });
     $('#shop', this.o.root)?.addEventListener('click', () => {
       this.sfx('tap');
-      this.shopReturn = () => this.renderTitle();
+      this.shopReturn = () => this.renderHub();
       this.renderShop();
     });
+    $('#book', this.o.root)?.addEventListener('click', () => {
+      this.sfx('tap');
+      this.renderBook();
+    });
+    $('#gift', this.o.root)?.addEventListener('click', () => void this.openGift());
+    $('#challenge', this.o.root)?.addEventListener('click', () => void this.openChallenge());
+    $('#vip', this.o.root)?.addEventListener('click', () => void this.callVip());
     $('#vib', this.o.root)?.addEventListener('click', () => {
       this.save.settings.vibration = !this.save.settings.vibration;
       this.persist();
       this.buzz(30);
-      this.renderTitle();
+      this.renderHub();
     });
     this.o.root.querySelectorAll<HTMLElement>('[data-lang]').forEach((b) =>
       b.addEventListener('click', () => {
@@ -222,46 +415,150 @@ export class App {
         setLanguage(code);
         this.save.settings.lang = code;
         this.persist();
-        this.renderTitle();
+        this.renderHub();
       }),
     );
-    $('#reset', this.o.root)?.addEventListener('click', () => this.confirmReset());
-  }
-
-  private confirmReset(): void {
-    const el = document.createElement('div');
-    el.className = 'modal';
-    el.innerHTML = `<div class="modal-card" role="dialog" aria-modal="true"><p>${esc(t('resetConfirm'))}</p>
-      <div class="row"><button class="btn" data-a="no">${esc(t('no'))}</button><button class="btn danger" data-a="yes">${esc(t('yes'))}</button></div></div>`;
-    this.o.root.appendChild(el);
-    el.addEventListener('click', (e) => {
-      const a = (e.target as HTMLElement).closest<HTMLElement>('[data-a]')?.dataset.a;
-      if (!a && e.target !== el) return;
-      el.remove();
-      if (a === 'yes') {
-        this.save = resetProgress(this.save);
-        this.renderTitle();
-      }
+    $('#reset', this.o.root)?.addEventListener('click', () => void this.confirmReset());
+    // gift box countdown
+    this.ticker = window.setInterval(() => {
+      const label = $('#gift-label', this.o.root);
+      if (!label) return clearInterval(this.ticker);
+      const left = meta.giftAt - Date.now();
+      if (left <= 0) {
+        label.textContent = t('giftReady');
+        $('#gift', this.o.root)?.classList.add('ready');
+      } else label.textContent = fmtTime(left);
+    }, 1000);
+    void this.showRewards(events).then(() => {
+      if (loginAvailable(meta, today)) void this.openLogin();
     });
   }
 
-  // ------------------------------------------------------------------ day flow
+  private missionsCard(): string {
+    const ms = this.save.meta.missions;
+    return `<section class="missions" aria-label="${esc(t('missions'))}"><h3>${icon.missions()}<span>${esc(t('missions'))}</span></h3>${ms.map((m) => this.missionRow(m)).join('')}</section>`;
+  }
 
-  private async startDay(): Promise<void> {
-    this.seed = (this.seed + 0x9e3779b9) >>> 0;
-    this.run = new DayRun(this.p.day, this.p.recipes, mulberry32(this.seed ^ this.p.day), this.preferNext ?? undefined);
-    this.preferNext = null;
-    this.lastSummaryDoubled = false;
-    this.renderPlay();
-    this.sfx('day');
-    const banner = document.createElement('div');
-    banner.className = 'day-banner';
-    banner.innerHTML = `${icon.sun()}<span>${esc(t('day', { n: this.p.day }))}</span>`;
-    $('.scene', this.o.root)?.appendChild(banner);
-    await wait(this.ms(900));
-    banner.remove();
-    this.gameplay.start();
-    await this.nextCustomer();
+  private missionRow(m: Mission): string {
+    const pct = Math.round((m.progress / m.target) * 100);
+    const text = t(`mission_${m.kind}`, { n: m.target, recipe: m.recipe ? name('recipes', m.recipe) : '' });
+    const pic = m.recipe ? recipeIcon(getRecipe(m.recipe).steps) : missionIcon(m.kind);
+    const reroll = this.p.gems >= REROLL_GEMS ? `<button class="reroll" data-reroll="${m.id}" aria-label="${esc(t('reroll'))}">${icon.redo()}</button>` : '';
+    return `<div class="mission" data-mission="${m.kind}"><div class="m-pic">${pic}</div><div class="m-body"><div class="m-text">${esc(text)}</div>
+      <div class="bar"><i style="width:${pct}%"></i><span>${m.progress}/${m.target}</span></div></div><div class="m-reward">${this.chips({ coins: m.reward.coins, gems: m.reward.gems })}</div>${reroll}</div>`;
+  }
+
+  private bindMissions(after: () => void): void {
+    this.o.root.querySelectorAll<HTMLButtonElement>('[data-reroll]').forEach((b) =>
+      b.addEventListener('click', () => {
+        if (rerollMission(this.save.meta, this.p, b.dataset.reroll ?? '', this.rng)) {
+          this.sfx('tap');
+          this.persist();
+          after();
+        }
+      }),
+    );
+  }
+
+  private async confirmReset(): Promise<void> {
+    const a = await this.modal(
+      `<p>${esc(t('resetConfirm'))}</p><div class="row"><button class="btn" data-a="no">${esc(t('no'))}</button><button class="btn danger" data-a="yes">${esc(t('yes'))}</button></div>`,
+    );
+    if (a === 'yes') {
+      this.save = resetProgress(this.save);
+      fillMissions(this.save.meta, this.p, this.rng);
+      this.persist();
+      this.renderHub();
+    }
+  }
+
+  // ------------------------------------------------------------------ daily rewards
+
+  private async openLogin(): Promise<void> {
+    const meta = this.save.meta;
+    const today = this.today();
+    if (!loginAvailable(meta, today)) return;
+    const day = loginDayIndex(meta, today);
+    const cells = LOGIN_REWARDS.map(
+      (r, i) =>
+        `<div class="cal ${i + 1 < day ? 'past' : i + 1 === day ? 'now' : ''} ${i === 6 ? 'big' : ''}"><small>${esc(t('loginDay', { n: i + 1 }))}</small><div class="reward-chips">${this.chips(r)}</div>${i + 1 < day ? `<span class="tick">${icon.check()}</span>` : ''}</div>`,
+    ).join('');
+    const a = await this.modal(
+      `<h2>${icon.calendar()}<span>${esc(t('dailyLogin'))}</span></h2><div class="calendar">${cells}</div>
+       <div class="row"><button class="btn" data-a="claim">${esc(t('claim'))}</button><button class="btn reward" data-a="x2">${icon.video()}<span>×2</span></button></div>`,
+      'login-modal',
+    );
+    let mult = 1;
+    if (a === 'x2') {
+      const ok = await this.o.platform.rewarded();
+      if (ok) mult = 2;
+      else this.toast(t('adUnavailable'));
+    }
+    const ev = claimLogin(meta, this.p, today, mult);
+    if (!ev) return;
+    this.sfx('coin');
+    this.toast(t('dailyLogin'), icon.calendar(), this.chips(ev.reward));
+    await this.showRewards(settleBuilds(meta, this.p, Date.now()));
+    this.persist();
+    this.updateWallet();
+  }
+
+  private async openGift(): Promise<void> {
+    const meta = this.save.meta;
+    if (!giftReady(meta, Date.now())) {
+      this.toast(fmtTime(meta.giftAt - Date.now()), icon.timer());
+      return;
+    }
+    const a = await this.modal(
+      `<div class="chest">${icon.gift()}</div><h2>${esc(t('gift'))}</h2>
+       <div class="row"><button class="btn" data-a="claim">${esc(t('claim'))}</button><button class="btn reward" data-a="x2">${icon.video()}<span>×2</span></button></div>`,
+      'gift-modal',
+    );
+    let mult = 1;
+    if (a === 'x2') {
+      const ok = await this.o.platform.rewarded();
+      if (ok) mult = 2;
+      else this.toast(t('adUnavailable'));
+    }
+    const ev = claimGift(meta, this.p, Date.now(), this.rng, mult);
+    if (ev) {
+      this.sfx('coin');
+      this.buzz(20);
+      this.toast(t('gift'), icon.gift(), this.chips(ev.reward));
+    }
+    this.persist();
+    this.renderHub();
+  }
+
+  private async callVip(): Promise<void> {
+    const meta = this.save.meta;
+    if (!canUseAd(meta, 'vip', this.today())) {
+      this.toast(t('dailyLimit'));
+      return;
+    }
+    const ok = await this.o.platform.rewarded();
+    if (!ok) {
+      this.toast(t('adUnavailable'));
+      return;
+    }
+    useAd(meta, 'vip', this.today());
+    this.vipNext = true;
+    this.persist();
+    this.toast(t('vipComing'), icon.crown());
+    this.renderHub();
+  }
+
+  private async openChallenge(): Promise<void> {
+    const done = !challengeAvailable(this.save.meta, this.today());
+    const a = await this.modal(
+      `<h2>${icon.calendar()}<span>${esc(t('challenge'))}</span></h2>
+       <p class="goal">${icon.star()}<span>${esc(t('challengeGoal', { n: CHALLENGE_STARS }))}</span> · ${icon.guest()}<span>${CHALLENGE_GUESTS}</span></p>
+       <div class="reward-chips">${done ? esc(t('challengeDoneToday')) : this.chips({ coins: 120, gems: 4, xp: 40 })}</div>
+       <div class="row"><button class="btn" data-a="no">${esc(t('back'))}</button><button class="btn primary" data-a="go">${icon.play()}</button></div>`,
+    );
+    if (a !== 'go') return;
+    this.challenge = true;
+    void this.startDay();
   }
 
   private renderPlay(): void {
@@ -270,14 +567,15 @@ export class App {
     this.o.root.innerHTML = `
       <div class="screen play-screen">
         <header class="hud">
-          <div class="pill">${icon.sun()}<span>${esc(t('day', { n: run.day }))}</span></div>
+          ${this.challenge ? `<div class="pill" id="challenge-pill">${icon.star()}<span id="challenge-stars">0/${CHALLENGE_STARS}</span></div>` : `<div class="pill">${icon.sun()}<span>${esc(t('day', { n: run.day }))}</span></div>`}
           <div class="dots" id="dots" aria-hidden="true"></div>
           ${this.coinPill()}
           ${this.muteButton()}
         </header>
         <section class="scene" id="scene" style="--progress:0">
-          ${cafeBackground(this.p.decor)}
+          ${cafeBackground(this.features())}
           <div class="guest-wrap" id="guest"></div>
+          <div class="helper-badge hidden" id="helper">${icon.hammer()}</div>
           <div class="bubble hidden" id="bubble" aria-label="${esc(t('order'))}"></div>
           <div class="counter-wrap">${counter(this.p.decor)}</div>
           <div class="fx" id="fx"></div>
@@ -328,7 +626,9 @@ export class App {
     const order = this.run?.order;
     if (!el || !order) return;
     el.className = `guest-wrap ${extra}`;
-    el.innerHTML = customer(order.look, mood);
+    el.innerHTML = customer(order.look, mood, order.kind, order.special);
+    el.dataset.kind = order.kind;
+    el.dataset.special = order.special ?? '';
   }
 
   private renderBubble(): void {
@@ -694,6 +994,7 @@ export class App {
       item?.classList.remove('to-tray');
       this.renderStation('tray');
       if (run.canServe) this.sfx('bell');
+      else await this.maybeHelper();
     } else {
       this.renderStation(id);
     }
@@ -741,20 +1042,50 @@ export class App {
     this.busy = false;
     this.renderStation();
     this.watch.start();
+    const sp = run.order?.special;
+    if (sp) {
+      this.sfx('unlock');
+      this.toast(t(sp), sp === 'vip' ? icon.crown() : icon.star());
+    }
+    await this.maybeHelper();
+  }
+
+  /** A hired helper prepares simple items (coffee, juice, croissant, toastie) by themself. */
+  private async maybeHelper(): Promise<void> {
+    const run = this.run;
+    const item = run?.currentItem;
+    if (!run || !item || this.busy || run.steps.length > 0 || !cafeEffects(this.save.meta, Date.now()).staff.includes(item.recipe)) return;
+    this.busy = true;
+    this.renderStation();
+    const badge = $('#helper', this.o.root);
+    badge?.classList.remove('hidden');
+    badge?.setAttribute('aria-label', t('staffHelping'));
+    this.sfx('pour', 0.8);
+    await wait(this.ms(1300));
+    badge?.classList.add('hidden');
+    if (this.run !== run) return;
+    run.autoComplete();
+    this.busy = false;
+    this.sfx('done');
+    this.renderStation('tray');
+    if (run.canServe) this.sfx('bell');
+    else await this.maybeHelper();
   }
 
   private async serve(): Promise<void> {
     const run = this.run;
-    if (!run || this.busy || this.action || !run.canServe) return;
+    const order = run?.order;
+    if (!run || !order || this.busy || this.action || !run.canServe) return;
     this.busy = true;
     clearTimeout(this.hintTimer);
     const before = this.p.coins;
-    const look = run.order?.look ?? 0;
-    const pay = run.serve(this.watch.elapsed()) as Payment;
+    const fx = cafeEffects(this.save.meta, Date.now());
+    const mods: PayMods = { tipBonus: fx.tipBonus, bonusStations: fx.bonusStations };
+    let pay = run.serve(this.watch.elapsed(), mods) as Payment;
     this.p.coins += pay.total;
+    this.p.gems += pay.gems;
     this.save.stats.customers += 1;
     this.save.stats.earned += pay.total;
-    if (pay.stars === 3) this.save.stats.perfect += 1;
     this.persist();
     this.sfx('bell');
     this.buzz(pay.stars === 3 ? [20, 40, 20] : 20);
@@ -765,21 +1096,99 @@ export class App {
     }
     $('#tray', this.o.root)?.classList.add('served');
     $('#bubble', this.o.root)?.classList.add('hidden');
-    const guest = $('#guest', this.o.root);
-    const mood: Mood = pay.stars === 3 ? 'happy' : pay.stars === 2 ? 'smile' : 'meh';
-    if (guest) {
-      guest.className = `guest-wrap ${pay.stars === 3 ? 'hop' : pay.stars === 2 ? 'nod' : ''}`;
-      guest.innerHTML = customer(look, mood);
-      guest.dataset.stars = String(pay.stars);
-    }
+    this.showGuestReaction(order, pay.stars);
     setTimeout(() => this.sfx(pay.stars === 3 ? 'happy' : pay.stars === 2 ? 'good' : 'soft'), 150);
     this.showPayment(pay, before);
-    await wait(this.ms(1600));
+    // optional rewarded video: turn a 1–2★ order into 3★ (a few times a day)
+    if (pay.stars < 3 && canUseAd(this.save.meta, 'redo', this.today())) {
+      const extra = await this.offerRedo(order, pay, mods);
+      if (extra) {
+        run.summary.base += extra.paid;
+        run.summary.tips += extra.tip;
+        run.summary.earned += extra.total;
+        run.summary.gems += extra.gems;
+        run.summary.perfect += 1;
+        run.summary.stars += 3 - pay.stars;
+        pay = { ...pay, stars: 3, paid: pay.paid + extra.paid, tip: pay.tip + extra.tip, total: pay.total + extra.total, gems: pay.gems + extra.gems };
+      }
+    } else await wait(this.ms(1600));
+    if (this.challenge) {
+      const el = $('#challenge-stars', this.o.root);
+      if (el) el.textContent = `${run.summary.stars}/${CHALLENGE_STARS}`;
+    }
+    const events = onServed(
+      this.save.meta,
+      this.p,
+      { recipes: order.items.map((i) => i.recipe), sizes: order.items.map((i) => i.size), stars: pay.stars, coins: pay.total, special: order.special, kind: order.kind },
+      this.rng,
+    );
+    events.push(...settleBuilds(this.save.meta, this.p, Date.now()));
+    if (pay.stars === 3) this.save.stats.perfect += 1;
+    this.persist();
+    this.updateWallet();
+    const guest = $('#guest', this.o.root);
     if (guest) guest.className = 'guest-wrap leave';
     await wait(this.ms(450));
     $('#tray', this.o.root)?.classList.remove('served');
+    await this.showRewards(events);
     this.busy = false;
     await this.nextCustomer();
+  }
+
+  private showGuestReaction(order: Order, stars: number): void {
+    const guest = $('#guest', this.o.root);
+    const mood: Mood = stars === 3 ? 'happy' : stars === 2 ? 'smile' : 'meh';
+    if (!guest) return;
+    guest.className = `guest-wrap ${stars === 3 ? 'hop' : stars === 2 ? 'nod' : ''}`;
+    guest.innerHTML = customer(order.look, mood, order.kind, order.special);
+    guest.dataset.stars = String(stars);
+  }
+
+  /** Shows the optional "Make it 3★" video button for a short while. Resolves with the extra payment. */
+  private offerRedo(order: Order, pay: Payment, mods: PayMods): Promise<Payment | null> {
+    return new Promise((resolve) => {
+      const fx = $('#fx', this.o.root);
+      if (!fx) {
+        resolve(null);
+        return;
+      }
+      const btn = document.createElement('button');
+      btn.className = 'redo-ad';
+      btn.id = 'redo-ad';
+      btn.innerHTML = `${icon.video()}<span>${esc(t('redo3'))}</span>`;
+      fx.appendChild(btn);
+      let done = false;
+      const finish = (v: Payment | null) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        btn.remove();
+        resolve(v);
+      };
+      const timer = setTimeout(() => finish(null), this.reduced ? 2500 : 3200);
+      btn.addEventListener('click', () => {
+        clearTimeout(timer);
+        btn.disabled = true;
+        void this.o.platform.rewarded().then(async (ok) => {
+          if (!ok) {
+            this.toast(t('adUnavailable'));
+            finish(null);
+            return;
+          }
+          useAd(this.save.meta, 'redo', this.today());
+          const extra = DayRun.upgradeTo3(pay, order.items, { ...mods, special: order.special });
+          const before = this.p.coins;
+          this.p.coins += extra.total;
+          this.p.gems += extra.gems;
+          this.persist();
+          this.showGuestReaction(order, 3);
+          this.sfx('happy');
+          this.showPayment({ ...extra, stars: 3 }, before);
+          await wait(this.ms(1200));
+          finish(extra);
+        });
+      });
+    });
   }
 
   private showPayment(pay: Payment, before: number): void {
@@ -789,7 +1198,7 @@ export class App {
       const pop = document.createElement('div');
       pop.className = `pay-pop stars-${pay.stars}`;
       pop.dataset.stars = String(pay.stars);
-      pop.innerHTML = `<div class="stars-row">${stars}</div><div class="pay-amount">+${pay.total} ${icon.coin()}</div>${pay.tip ? `<div class="pay-tip">${icon.jar()}+${pay.tip}</div>` : ''}`;
+      pop.innerHTML = `<div class="stars-row">${stars}</div><div class="pay-amount">+${pay.total} ${icon.coin()}</div>${pay.tip ? `<div class="pay-tip">${icon.jar()}+${pay.tip}</div>` : ''}${pay.gems ? `<div class="pay-tip">${icon.gem()}+${pay.gems}</div>` : ''}`;
       fx.appendChild(pop);
       setTimeout(() => pop.remove(), 1700);
       if (!this.reduced) {
@@ -826,49 +1235,103 @@ export class App {
     setTimeout(() => $('#coins', this.o.root)?.classList.remove('bump'), 1100);
   }
 
+  // ------------------------------------------------------------------ day flow
+
+  private async startDay(): Promise<void> {
+    clearInterval(this.ticker);
+    const meta = this.save.meta;
+    const fx = cafeEffects(meta, Date.now());
+    startDayMeta(meta);
+    if (this.challenge) {
+      const today = this.today();
+      this.run = new DayRun(this.p.day, this.p.recipes, mulberry32(challengeSeed(today)), undefined, guestOptions(meta), 0, CHALLENGE_GUESTS);
+    } else {
+      this.seed = (this.seed + 0x9e3779b9) >>> 0;
+      this.run = new DayRun(this.p.day, this.p.recipes, mulberry32(this.seed ^ this.p.day), this.preferNext ?? undefined, guestOptions(meta, this.vipNext ? 'vip' : null), fx.extraGuests);
+      this.preferNext = null;
+      this.vipNext = false;
+    }
+    this.persist();
+    this.lastSummaryDoubled = false;
+    this.renderPlay();
+    this.sfx('day');
+    const banner = document.createElement('div');
+    banner.className = 'day-banner';
+    banner.innerHTML = this.challenge
+      ? `${icon.calendar()}<span>${esc(t('challengeGoal', { n: CHALLENGE_STARS }))}</span>`
+      : `${icon.sun()}<span>${esc(t('day', { n: this.p.day }))}</span>`;
+    $('.scene', this.o.root)?.appendChild(banner);
+    await wait(this.ms(this.challenge ? 1400 : 900));
+    banner.remove();
+    this.gameplay.start();
+    await this.nextCustomer();
+  }
+
   private endDay(): void {
     const run = this.run;
     if (!run) return;
     this.gameplay.stop();
     clearTimeout(this.hintTimer);
-    this.p.day = run.day + 1;
-    this.save.stats.days += 1;
+    if (this.challenge) {
+      this.challengeResult = finishChallenge(this.save.meta, this.p, this.today(), run.summary.stars);
+      this.dayChestEvents = [];
+    } else {
+      this.p.day = run.day + 1;
+      this.save.stats.days += 1;
+      this.dayChestEvents = claimDayChest(this.save.meta, this.p, run.day, run.summary.served, run.summary.perfect);
+    }
     this.persist();
     this.renderSummary();
+    void this.showRewards([...this.dayChestEvents, ...(this.challengeResult ?? [])].filter((e) => e.source === 'level'));
   }
 
   private renderSummary(): void {
     const run = this.run;
     if (!run) return;
     const s = run.summary;
+    const ch = this.challenge;
+    const won = ch && (this.challengeResult?.length ?? 0) > 0;
+    const chest = dayChest(s.served, s.perfect);
     this.o.root.innerHTML = `
       <div class="screen summary-screen">
-        <header class="hud"><div class="pill">${icon.sun()}<span>${esc(t('day', { n: s.day }))}</span></div>${this.coinPill()}${this.muteButton()}</header>
+        <header class="hud">${this.levelPill()}${this.coinPill()}${this.gemPill()}${this.muteButton()}</header>
         <section class="summary-card">
-          <div class="sunset">${icon.sun()}</div>
-          <h2>${esc(t('dayDone', { n: s.day }))}</h2>
+          <div class="sunset">${ch ? icon.calendar() : icon.sun()}</div>
+          <h2>${esc(ch ? (won ? t('challengeWon') : t('challenge')) : t('dayDone', { n: s.day }))}</h2>
+          ${ch ? `<p class="goal ${won ? 'won' : ''}" id="challenge-result">${icon.star()}<b>${s.stars}</b>/<span>${CHALLENGE_STARS}</span></p>${won ? '' : `<p class="muted-note">${esc(t('challengeLost'))}</p>`}` : ''}
           <ul class="stats">
             <li>${icon.guest()}<span>${esc(t('served'))}</span><b>${s.served}</b></li>
             <li>${icon.coin()}<span>${esc(t('earnedBase'))}</span><b>${s.base}</b></li>
             <li>${icon.jar()}<span>${esc(t('earnedTips'))}</span><b>${s.tips}</b></li>
             <li>${icon.star()}<span>${esc(t('perfect'))}</span><b>${s.perfect}</b></li>
+            ${s.gems ? `<li>${icon.gem()}<span>${esc(t('gems'))}</span><b>${s.gems}</b></li>` : ''}
           </ul>
+          ${!ch ? `<div class="day-bonus">${icon.gift()}<span>${esc(t('dayBonus'))}</span><div class="reward-chips">${this.chips(chest)}</div></div>` : won ? `<div class="day-bonus">${icon.gift()}<div class="reward-chips">${this.chips({ coins: 120, gems: 4, xp: 40 })}</div></div>` : ''}
           <div class="total">${icon.coin()}<span>${esc(t('total'))}</span><b id="day-total">+${s.earned * (this.lastSummaryDoubled ? 2 : 1)}</b></div>
         </section>
+        ${this.missionsCard()}
         <div class="menu">
           ${s.earned > 0 && !this.lastSummaryDoubled ? `<button class="btn reward" id="double">${icon.video()}<span>${esc(t('double'))}</span><b>×2</b></button>` : ''}
-          <button class="btn" id="shop">${icon.shop()}<span>${esc(t('shop'))}</span></button>
-          <button class="btn primary big" id="next">${icon.next()}<span>${esc(t('nextDay'))}</span></button>
+          <div class="row">
+            <button class="btn" id="hub">${icon.back()}<span>${esc(t('toCafe'))}</span></button>
+            <button class="btn" id="shop">${icon.shop()}<span>${esc(t('shop'))}</span></button>
+          </div>
+          ${ch ? '' : `<button class="btn primary big" id="next">${icon.next()}<span>${esc(t('nextDay'))}</span></button>`}
         </div>
       </div>`;
     this.bindMute();
+    this.bindMissions(() => this.renderSummary());
     $('#double', this.o.root)?.addEventListener('click', () => void this.doubleCoins());
+    $('#hub', this.o.root)?.addEventListener('click', () => {
+      this.sfx('tap');
+      void this.leaveSummary(() => this.renderHub());
+    });
     $('#shop', this.o.root)?.addEventListener('click', () => {
       this.sfx('tap');
       this.shopReturn = () => this.renderSummary();
       this.renderShop();
     });
-    $('#next', this.o.root)?.addEventListener('click', () => void this.goNextDay());
+    $('#next', this.o.root)?.addEventListener('click', () => void this.leaveSummary(() => void this.startDay()));
   }
 
   private async doubleCoins(): Promise<void> {
@@ -886,34 +1349,37 @@ export class App {
     this.p.coins += run.summary.earned;
     this.persist();
     this.sfx('coin');
-    this.toast(t('doubled'));
+    this.toast(t('doubled'), icon.coin());
     this.renderSummary();
   }
 
-  private async goNextDay(): Promise<void> {
+  /** Midgame ad only between days (after day 3, max once every 3 minutes). */
+  private async leaveSummary(next: () => void): Promise<void> {
     const completed = this.p.day - 1;
-    const btn = $('#next', this.o.root) as HTMLButtonElement | null;
-    if (btn) btn.disabled = true;
-    if (midgameAllowed(completed, this.throttle)) {
+    this.o.root.querySelectorAll<HTMLButtonElement>('.menu button').forEach((b) => (b.disabled = true));
+    if (!this.challenge && midgameAllowed(completed, this.throttle)) {
       this.gameplay.stop();
       await this.o.platform.midgame();
       this.throttle.markShown();
     }
-    await this.startDay();
+    this.challenge = false;
+    this.challengeResult = null;
+    next();
   }
 
   // ------------------------------------------------------------------ shop
 
   private renderShop(): void {
-    const tabs: ShopTab[] = ['recipes', 'equipment', 'decor'];
-    const tabIcon: Record<ShopTab, string> = { recipes: icon.recipes(), equipment: icon.equipment(), decor: icon.decor() };
+    clearInterval(this.ticker);
+    const tabs: ShopTab[] = ['recipes', 'equipment', 'decor', 'cafe'];
+    const tabIcon: Record<ShopTab, string> = { recipes: icon.recipes(), equipment: icon.equipment(), decor: icon.decor(), cafe: icon.hammer() };
     this.o.root.innerHTML = `
       <div class="screen shop-screen">
-        <header class="hud"><button class="icon-btn" id="back" aria-label="${esc(t('back'))}">${icon.back()}</button><h2 class="hud-title">${esc(t('shop'))}</h2>${this.coinPill()}</header>
-        <div class="tabs" role="tablist">
+        <header class="hud"><button class="icon-btn" id="back" aria-label="${esc(t('back'))}">${icon.back()}</button><h2 class="hud-title">${esc(t('shop'))}</h2>${this.coinPill()}${this.gemPill()}</header>
+        <div class="tabs four" role="tablist">
           ${tabs.map((k) => `<button role="tab" class="tab ${k === this.shopTab ? 'on' : ''}" aria-selected="${k === this.shopTab}" data-tab="${k}">${tabIcon[k]}<span>${esc(t(k))}</span></button>`).join('')}
         </div>
-        ${this.shopTab === 'decor' ? `<div class="decor-preview">${cafeBackground(this.p.decor)}<div class="counter-wrap">${counter(this.p.decor)}</div></div>` : ''}
+        ${this.shopTab === 'decor' || this.shopTab === 'cafe' ? `<div class="decor-preview">${cafeBackground(this.features())}<div class="counter-wrap">${counter(this.p.decor)}</div></div>` : ''}
         <div class="cards">${this.shopCards()}</div>
       </div>`;
     $('#back', this.o.root)?.addEventListener('click', () => {
@@ -928,29 +1394,49 @@ export class App {
       }),
     );
     this.o.root.querySelectorAll<HTMLButtonElement>('[data-buy]').forEach((b) => b.addEventListener('click', () => void this.buy(b)));
+    if (this.shopTab === 'cafe' && Object.values(this.save.meta.built).some((at) => at > Date.now())) {
+      this.ticker = window.setInterval(() => {
+        if (!$('.shop-screen', this.o.root)) return clearInterval(this.ticker);
+        this.o.root.querySelectorAll<HTMLElement>('[data-left]').forEach((el) => {
+          const left = Number(el.dataset.left) - Date.now();
+          el.textContent = fmtTime(left);
+          if (left <= 0) {
+            clearInterval(this.ticker);
+            void this.showRewards(settleBuilds(this.save.meta, this.p, Date.now())).then(() => {
+              this.persist();
+              if ($('.shop-screen', this.o.root)) this.renderShop();
+            });
+          }
+        });
+      }, 1000);
+    }
   }
 
-  private priceButton(kind: string, id: string, cost: number, affordable: boolean): string {
-    return `<button class="buy ${affordable ? '' : 'short'}" data-buy="${kind}" data-id="${id}" ${affordable ? '' : 'disabled'}>${icon.coin()}<span>${cost}</span></button>`;
+  private priceButton(kind: string, id: string, cost: number, affordable: boolean, currency: 'coin' | 'gem' = 'coin'): string {
+    return `<button class="buy ${affordable ? '' : 'short'} ${currency}" data-buy="${kind}" data-id="${id}" ${affordable ? '' : 'disabled'}>${currency === 'gem' ? icon.gem() : icon.coin()}<span>${cost}</span></button>`;
   }
 
   private shopCards(): string {
     const p = this.p;
+    const meta = this.save.meta;
+    const now = Date.now();
     if (this.shopTab === 'recipes') {
-      const canReward = this.save.rewardUnlockDay !== p.day;
-      // fancy recipes still to unlock first, then the menu you already have
-      const sorted = [...RECIPES].sort((a, b) => Number(p.recipes.includes(a.id)) - Number(p.recipes.includes(b.id)) || a.cost - b.cost);
-      return sorted.map((r) => {
-        const st = recipeStatus(p, r.id);
-        let action: string;
-        if (st === 'owned') action = `<span class="badge-owned">${icon.check()}</span>`;
-        else {
-          action = this.priceButton('recipe', r.id, r.cost, st === 'buyable');
-          if (st === 'short' && canReward)
-            action += `<button class="buy reward" data-buy="reward" data-id="${r.id}" aria-label="${esc(t('watchAd'))}: ${esc(t('unlockFree'))}">${icon.video()}<span>${esc(t('unlockFree'))}</span></button>`;
-        }
-        return `<div class="card ${st}" data-recipe="${r.id}"><div class="card-pic">${recipeIcon(r.steps)}</div><div class="card-name">${esc(name('recipes', r.id))}</div><div class="card-action">${action}</div></div>`;
-      }).join('');
+      const next = nextLockedRecipe(p);
+      const canAd = canUseAd(meta, 'unlock', this.today());
+      const sorted = [...RECIPES].sort((a, b) => Number(p.recipes.includes(a.id)) - Number(p.recipes.includes(b.id)) || a.level - b.level);
+      return sorted
+        .map((r) => {
+          const st = recipeStatus(p, r.id);
+          let action: string;
+          if (st === 'owned') action = `<span class="badge-owned">${icon.check()}</span>`;
+          else {
+            const gems = recipeGemCost(r.id);
+            action = `<span class="badge-locked">${icon.lock()}<span>${esc(t('level', { n: r.level }))}</span></span>` + this.priceButton('recipe', r.id, gems, p.gems >= gems, 'gem');
+            if (r.id === next && canAd) action += `<button class="buy reward" data-buy="recipe-ad" data-id="${r.id}">${icon.video()}<span>${esc(t('unlockNow'))}</span></button>`;
+          }
+          return `<div class="card ${st}" data-recipe="${r.id}"><div class="card-pic">${recipeIcon(r.steps)}</div><div class="card-name">${esc(name('recipes', r.id))}</div><div class="card-action">${action}</div></div>`;
+        })
+        .join('');
     }
     if (this.shopTab === 'equipment') {
       return MACHINES.map((m) => {
@@ -965,10 +1451,38 @@ export class App {
         return `<div class="card"><div class="card-pic">${machineIcon(m)}</div><div class="card-name">${esc(name('machines', m))}</div><div class="level" aria-label="${esc(t('level', { n: lvl + 1 }))}">${dots}<span class="speed">» ${(machineDuration(lvl) / 1000).toFixed(1)}s</span></div><div class="card-action">${action}</div></div>`;
       }).join('');
     }
-    return DECOR.map((d) => {
-      const owned = p.decor.includes(d.id);
-      const action = owned ? `<span class="badge-owned">${icon.check()}</span>` : this.priceButton('decor', d.id, d.cost, p.coins >= d.cost);
-      return `<div class="card ${owned ? 'owned' : ''}"><div class="card-pic decor-pic">${decorIcon(d.id)}</div><div class="card-name">${esc(name('decor', d.id))}</div><div class="card-action">${action}</div></div>`;
+    if (this.shopTab === 'decor') {
+      return DECOR.map((d) => {
+        const owned = p.decor.includes(d.id);
+        const action = owned
+          ? `<span class="badge-owned">${icon.check()}</span>`
+          : d.gems
+            ? this.priceButton('decor', d.id, d.gems, p.gems >= d.gems, 'gem')
+            : this.priceButton('decor', d.id, d.cost, p.coins >= d.cost);
+        return `<div class="card ${owned ? 'owned' : ''} ${d.gems ? 'premium' : ''}"><div class="card-pic decor-pic">${decorIcon(d.id)}</div><div class="card-name">${esc(name('decor', d.id))}</div><div class="card-action">${action}</div></div>`;
+      }).join('');
+    }
+    return EXPANSIONS.map((e) => {
+      const st = expansionStatus(meta, p, e.id, now);
+      const info = e.staff ? name('expansionInfo', 'staff') : e.theme ? name('expansionInfo', 'theme') : e.guests ? name('expansionInfo', 'guests') : e.tip ? name('expansionInfo', 'tip').replace('{n}', String(Math.round(e.tip * 100))) : e.stations ? name('expansionInfo', 'stations') : name('expansionInfo', 'counter');
+      let action: string;
+      if (st === 'built') action = `<span class="badge-owned">${icon.check()}</span>`;
+      else if (st === 'building') {
+        const at = meta.built[e.id] ?? now;
+        const gems = skipCost(meta, e.id, now);
+        action = `<span class="build-timer">${icon.timer()}<span data-left="${at}">${fmtTime(at - now)}</span></span>
+          <button class="buy reward" data-buy="finish-ad" data-id="${e.id}">${icon.video()}<span>${esc(t('finishNow'))}</span></button>
+          ${this.priceButton('finish-gems', e.id, gems, p.gems >= gems, 'gem')}`;
+      } else if (st === 'locked') {
+        action =
+          meta.level < e.level
+            ? `<span class="badge-locked">${icon.lock()}<span>${esc(t('level', { n: e.level }))}</span></span>`
+            : `<span class="badge-locked">${icon.lock()}<span>${esc(t('needs', { name: name('expansions', e.requires ?? '') }))}</span></span>`;
+      } else {
+        const prices = [e.coins ? `${icon.coin()}<span>${e.coins}</span>` : '', e.gems ? `${icon.gem()}<span>${e.gems}</span>` : ''].join('');
+        action = `<button class="buy ${st === 'buyable' ? '' : 'short'}" data-buy="build" data-id="${e.id}" ${st === 'buyable' ? '' : 'disabled'}>${prices}${e.minutes ? `<small>${icon.timer()}${e.minutes}′</small>` : ''}</button>`;
+      }
+      return `<div class="card ${st}" data-expansion="${e.id}"><div class="card-pic decor-pic">${expansionIcon(e.id)}</div><div class="card-name">${esc(name('expansions', e.id))}</div><div class="card-info">${esc(info)}</div><div class="card-action">${action}</div></div>`;
     }).join('');
   }
 
@@ -976,47 +1490,102 @@ export class App {
     const kind = b.dataset.buy;
     const id = b.dataset.id ?? '';
     const p = this.p;
+    const meta = this.save.meta;
+    const now = Date.now();
+    let ok = false;
     if (kind === 'recipe') {
-      if (buyRecipe(p, id)) {
+      ok = buyRecipeWithGems(p, id);
+      if (ok) {
         this.preferNext = id;
-        this.persist();
-        this.renderShop();
         this.celebrateRecipe(id);
-        return;
       }
-    } else if (kind === 'reward') {
+    } else if (kind === 'recipe-ad') {
       b.disabled = true;
-      const ok = await this.o.platform.rewarded();
-      if (ok && grantRecipe(p, id)) {
-        this.preferNext = id;
-        this.save.rewardUnlockDay = p.day;
-        this.persist();
-        this.renderShop();
-        this.celebrateRecipe(id);
-        return;
-      }
-      b.disabled = false;
-      if (!ok) this.toast(t('adUnavailable'));
-      return;
+      if (await this.o.platform.rewarded()) {
+        useAd(meta, 'unlock', this.today());
+        ok = grantRecipe(p, id);
+        if (ok) {
+          this.preferNext = id;
+          this.celebrateRecipe(id);
+        }
+      } else this.toast(t('adUnavailable'));
     } else if (kind === 'machine') {
-      if (isMachine(id) && buyEquipment(p, id)) {
-        this.persist();
-        this.sfx('unlock');
-        this.buzz(20);
-        this.renderShop();
-        return;
-      }
+      ok = isMachine(id) && buyEquipment(p, id);
     } else if (kind === 'decor') {
-      if (buyDecor(p, id)) {
-        this.persist();
+      ok = buyDecor(p, id);
+    } else if (kind === 'build') {
+      ok = startBuild(meta, p, id, now);
+    } else if (kind === 'finish-ad') {
+      b.disabled = true;
+      if (await this.o.platform.rewarded()) ok = finishBuild(meta, p, id, Date.now(), false);
+      else this.toast(t('adUnavailable'));
+    } else if (kind === 'finish-gems') {
+      ok = finishBuild(meta, p, id, now, true);
+    }
+    if (ok) {
+      if (kind !== 'recipe' && kind !== 'recipe-ad') {
         this.sfx('unlock');
         this.buzz(20);
-        this.renderShop();
-        return;
       }
+      const events = settleBuilds(meta, p, Date.now());
+      this.persist();
+      this.renderShop();
+      await this.showRewards(events);
+      return;
     }
-    this.sfx('oops');
+    if (kind !== 'recipe-ad' && kind !== 'finish-ad') this.sfx('oops');
+    if (b.isConnected) b.disabled = false;
   }
+
+  private celebrateRecipe(id: string): void {
+    this.o.platform.happytime();
+    this.sfx('unlock');
+    this.buzz([20, 40, 20]);
+    this.toast(`${t('newRecipe')} ${name('recipes', id)}`, recipeIcon(getRecipe(id).steps));
+  }
+
+  // ------------------------------------------------------------------ book (stickers & achievements)
+
+  private renderBook(): void {
+    clearInterval(this.ticker);
+    const meta = this.save.meta;
+    const body =
+      this.bookTab === 'stickers'
+        ? `<div class="stickers">${STICKERS.map((id) => {
+            const n = meta.stickers[id] ?? 0;
+            return `<div class="sticker ${n ? 'got' : 'missing'}" data-sticker="${id}"><div class="sticker-pic">${this.guestPic(id)}</div><b>${esc(n ? name('guests', id) : '?')}</b><small>${n ? `×${n}` : esc(t('level', { n: CUSTOMER_LEVEL[id] }))}</small></div>`;
+          }).join('')}</div>`
+        : `<div class="achievements">${ACHIEVEMENTS.map((a) => {
+            const done = meta.achievements.includes(a.id);
+            const v = Math.min(a.goal, a.value(meta, this.p));
+            return `<div class="achievement ${done ? 'done' : ''}" data-achievement="${a.id}"><div class="a-pic">${icon.trophy()}</div><div class="m-body"><div class="m-text">${esc(name('achievements', a.id))}</div><div class="bar"><i style="width:${Math.round((v / a.goal) * 100)}%"></i><span>${v}/${a.goal}</span></div></div><div class="m-reward">${done ? `<span class="badge-owned">${icon.check()}</span>` : this.chips({ gems: a.gems })}</div></div>`;
+          }).join('')}</div>`;
+    this.o.root.innerHTML = `
+      <div class="screen book-screen">
+        <header class="hud"><button class="icon-btn" id="back" aria-label="${esc(t('back'))}">${icon.back()}</button><h2 class="hud-title">${esc(t('book'))}</h2>${this.gemPill()}</header>
+        <div class="tabs" role="tablist">
+          <button role="tab" class="tab ${this.bookTab === 'stickers' ? 'on' : ''}" data-book="stickers">${icon.book()}<span>${esc(t('stickers'))}</span></button>
+          <button role="tab" class="tab ${this.bookTab === 'achievements' ? 'on' : ''}" data-book="achievements">${icon.trophy()}<span>${esc(t('achievements'))}</span></button>
+        </div>
+        ${body}
+      </div>`;
+    $('#back', this.o.root)?.addEventListener('click', () => this.renderHub());
+    this.o.root.querySelectorAll<HTMLElement>('[data-book]').forEach((b) =>
+      b.addEventListener('click', () => {
+        this.bookTab = (b.dataset.book as BookTab) ?? 'stickers';
+        this.renderBook();
+      }),
+    );
+  }
+}
+
+function missionIcon(kind: Mission['kind']): string {
+  if (kind === 'vip') return icon.crown();
+  if (kind === 'perfect' || kind === 'perfect_streak' || kind === 'stars') return icon.star();
+  if (kind === 'earn_today') return icon.coin();
+  if (kind === 'large') return drawItem({ steps: ['cup', 'coffee', 'milk', 'foam'], size: 'L' });
+  if (kind === 'combo') return recipeIcon(getRecipe('croissant').steps);
+  return icon.guest();
 }
 
 function hit(el: HTMLElement, x: number, y: number): boolean {

@@ -5,7 +5,7 @@ import {
   STAR_PAY,
   buyDecor,
   buyEquipment,
-  buyRecipe,
+  buyRecipeWithGems,
   checkStep,
   computePayment,
   customersForDay,
@@ -24,7 +24,7 @@ import {
   zoneWidth,
   type OrderItem,
 } from '../../src/core/game';
-import { DECOR, INGREDIENTS, MACHINE_MS, RECIPES, STARTER_RECIPES, actionOf, getRecipe, machineDuration, stationIngredients } from '../../src/core/recipes';
+import { DECOR, INGREDIENTS, MACHINE_MS, RECIPES, STARTER_RECIPES, actionOf, getRecipe, machineDuration, recipeGemCost, stationIngredients } from '../../src/core/recipes';
 import { mulberry32 } from '../../src/core/rng';
 import { actionLevel } from '../../src/ui/app';
 
@@ -237,17 +237,67 @@ describe('a day of service', () => {
 });
 
 describe('unlocks', () => {
-  it('fancy recipes are bought with coins', () => {
+  it('fancy recipes unlock by level, or early with gems', () => {
     const p = newProgress();
     expect(fancyRecipes().length).toBeGreaterThanOrEqual(5);
     expect(recipeStatus(p, 'latte')).toBe('owned');
-    expect(recipeStatus(p, 'cake')).toBe('short');
-    expect(buyRecipe(p, 'cake')).toBe(false);
-    p.coins = 65;
-    expect(buyRecipe(p, 'cake')).toBe(true);
-    expect(p.coins).toBe(5);
+    expect(recipeStatus(p, 'cake')).toBe('locked');
+    p.coins = 10_000;
+    expect(buyRecipeWithGems(p, 'cake')).toBe(false); // coins don't buy recipes
+    p.gems = recipeGemCost('cake') + 1;
+    expect(buyRecipeWithGems(p, 'cake')).toBe(true);
+    expect(p.gems).toBe(1);
     expect(p.recipes.at(-1)).toBe('cake');
-    expect(buyRecipe(p, 'cake')).toBe(false);
+    expect(buyRecipeWithGems(p, 'cake')).toBe(false);
+  });
+  it('special guests pay more: VIP double tip, critic gem on 3★, celebrity double + gems', () => {
+    const items = [item('cake', ['plate', 'cake', 'cherry'])];
+    const normal = computePayment(items, [3], 1000, 0);
+    const vip = computePayment(items, [3], 1000, 0, { special: 'vip' });
+    const vip2 = computePayment(items, [2], 1000, 0, { special: 'vip' });
+    const critic = computePayment(items, [3], 1000, 0, { special: 'critic' });
+    const critic2 = computePayment(items, [2], 1000, 0, { special: 'critic' });
+    const celeb = computePayment(items, [2], 1000, 0, { special: 'celebrity' });
+    expect(vip.tip).toBe(normal.tip * 2);
+    expect(vip2.tip).toBeGreaterThan(0);
+    expect(critic.gems).toBe(1);
+    expect(critic.tip).toBe(normal.tip * 3);
+    expect(critic2.gems).toBe(0);
+    expect(celeb.gems).toBe(2);
+    expect(celeb.paid).toBe(computePayment(items, [2], 1000, 0).paid * 2);
+  });
+  it('café bonuses: terrace tips and station bonus coins', () => {
+    const items = [item('cake', ['plate', 'cake', 'cherry'])];
+    const base = computePayment(items, [3], 1000, 0);
+    const bonus = computePayment(items, [3], 1000, 0, { tipBonus: 0.5, bonusStations: ['pastry'] });
+    expect(bonus.paid).toBe(base.paid + 1);
+    expect(bonus.tip).toBe(Math.round(base.tip * 1.5));
+  });
+  it('redo-for-3★ pays exactly the difference', () => {
+    const items = [item('cake', ['plate', 'cake', 'cherry'])];
+    const one = computePayment(items, [1], 1000, 0);
+    const extra = DayRun.upgradeTo3(one, items);
+    const best = computePayment(items, [3], 0, 0);
+    expect(one.total + extra.total).toBe(best.total);
+  });
+  it('a staff helper completes an item perfectly', () => {
+    const run = new DayRun(1, ['juice'], mulberry32(4));
+    expect(run.autoComplete()).toBe(true);
+    expect(run.canServe).toBe(true);
+    expect(run.serve(1000)!.stars).toBe(3);
+  });
+  it('special guests and new kinds appear only when allowed', () => {
+    const orders = generateDay(5, STARTER_RECIPES, mulberry32(3), undefined, { kinds: ['fox'], vip: 1, critic: 0, celebrity: 0 }, 2);
+    expect(orders).toHaveLength(customersForDay(5, 2));
+    for (const o of orders) {
+      expect(o.kind).toBe('fox');
+      expect(o.special).toBe('vip');
+    }
+    const plain = generateDay(5, STARTER_RECIPES, mulberry32(3));
+    expect(plain.every((o) => o.special === null)).toBe(true);
+    const first = generateDay(5, STARTER_RECIPES, mulberry32(3), undefined, { kinds: ['cat'], vip: 0, critic: 0, celebrity: 0, first: 'vip' });
+    expect(first[0]!.special).toBe('vip');
+    expect(first.slice(1).every((o) => o.special === null)).toBe(true);
   });
   it('rewarded unlock needs no coins', () => {
     const p = newProgress();
@@ -271,5 +321,11 @@ describe('unlocks', () => {
     p.coins = d.cost;
     expect(buyDecor(p, d.id)).toBe(true);
     expect(buyDecor(p, d.id)).toBe(false);
+    const premium = DECOR.find((x) => x.gems)!;
+    p.coins = 10_000;
+    expect(buyDecor(p, premium.id)).toBe(false); // gems needed
+    p.gems = premium.gems!;
+    expect(buyDecor(p, premium.id)).toBe(true);
+    expect(p.gems).toBe(0);
   });
 });

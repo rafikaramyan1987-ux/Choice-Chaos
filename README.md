@@ -22,12 +22,60 @@ A relaxing, mobile-first cooking game: you run a small warm café-bar. Guests ar
 - **Pay = base price × quality**: 3★ 100 % + tip (bigger when quick and without mistakes), 2★ 70 %, 1★ 40 %.
   S/M/L cups cost ×0.8 / ×1 / ×1.3.
 - **Days**: 6–10 guests, then a calm summary. Combo orders (2–3 items) become a bit more frequent over the days.
-- **Coins unlock** fancy recipes (cake, ice-cream cone, sundae, smoothies, veggie toastie, berry crepe), faster
-  machines (shorter warm-up, the time inside the green zone stays the same) and decorations shown in the café.
+- **Coins** buy faster machines (shorter warm-up, the time inside the green zone stays the same), decorations and
+  café expansions; fancy recipes unlock with the player level (see *Progression*).
 - Everything is drawn in SVG (no image files, no web fonts), sounds are synthesized with WebAudio.
 - Mute button, optional vibration, `prefers-reduced-motion` support, EN/FR, portrait 360px+.
 - Progress saved in `localStorage` (every access in `try/catch`, memory fallback). No cookies, no analytics.
 - The GitHub Pages build makes **zero** external requests.
+
+## Progression & reward loop
+
+All rules are pure functions in `src/core/meta.ts` (unit tested in `tests/unit/meta.test.ts`).
+
+- **Player level & XP.** Every order gives XP (`orderXp`), and so do missions, the day bonus and finished
+  constructions. Each level-up opens a **chest** (coins + gems) and unlocks something (`levelUnlocks`): a fancy
+  recipe (lv 2, 4, 6, 7, 9, 10, 12), a new guest type (fox lv 3, panda lv 5, frog lv 8), special guests (VIP lv 3,
+  critic lv 5, celebrity lv 9) or a new café area in the shop.
+- **Missions.** There are always 3 active missions (serve N guests, serve a recipe, perfect orders, a 3★ streak,
+  coins in one day, special guests, combos, stars, large drinks), with progress bars on the café screen and the
+  summary. When one is completed it pays coins/XP (sometimes a gem) and a new one appears. At most one "hard"
+  mission is active at a time. You can swap a mission for 1 gem.
+- **Café expansion** (long-term goal, shop → Café): tables (+1 guest a day each), sunny terrace (+15 % tips),
+  bakery corner and ice-cream bar (+1 coin per item of those stations), second counter, then **staff helpers**
+  (barista / baker) who make simple items by themselves, the winter theme (gems) and a lounge room. Building takes
+  real time (2–30 min); you can finish it right away with a video or with gems. Everything is drawn in the café.
+- **Daily.** A 7-day login calendar (day 7 is the biggest, ×2 with a video). A daily challenge: 8 guests, the same
+  for everyone on that date, reach 18★ for coins, gems and XP (once a day).
+- **Gift box** every 15 minutes (×2 with a video).
+- **Special guests.** VIPs (double tips, tip even on 2★), food critics (triple tip + a gem for 3★) and rare
+  celebrities (everything ×2 + 2 gems). Guests are never angry.
+- **Sticker book.** You get a sticker the first time you serve each guest type (11 in total).
+- **Achievements** (19) give gems.
+- **Gems** are the second currency: premium decor, the winter theme, staff, recipes before their level, mission
+  swaps and finishing constructions. They are earned only by playing — missions, achievements, level-ups, daily
+  rewards, gifts, critics/celebrities, challenges. **There are no real-money purchases.**
+- **End of day.** A small day bonus (more for 3★ orders, a gem for a flawless day) and the existing
+  "×2 today's coins" video.
+
+### Balance
+
+`tests/unit/balance.test.ts` simulates a typical player (75 % 3★ steps, realistic step timings, buys what they can
+afford, claims gifts) for 30 minutes. It prints the reward timeline and fails if, during the first 20 minutes, more
+than **2 minutes** pass without a reward or unlock. Across 8 seeds the longest gap is currently 71–110 s. Run
+`SIM_SEED=3 npx vitest run tests/unit/balance.test.ts --reporter=verbose` to see another timeline.
+
+### Rewarded videos (always optional)
+
+| Where | What | Limit |
+| --- | --- | --- |
+| After a 1–2★ order | "Make it 3★" (pays the difference, guest becomes happy) | 3 a day |
+| Gift box | ×2 | every 15 min |
+| Daily calendar | ×2 | once a day |
+| Café screen | "VIP now": the first guest of the next day is a VIP | once a day |
+| Shop → Café | finish a construction now | per construction |
+| Shop → Recipes | unlock the next recipe now | once a day |
+| End of day | ×2 today's coins | once a day |
 
 ## Commands
 
@@ -87,8 +135,7 @@ Add `?seed=123` to the URL for reproducible orders (used by tests).
   served, `gameplayStop` on the title, summary and shop screens and before ads (de-duplicated by `GameplayTracker`).
 - **Midgame** ad only between days ("Next day"), never before day 3 is completed, at most once every 3 minutes
   (`midgameAllowed`, `MidgameThrottle`).
-- **Rewarded** ads: "Double today's coins" on the end-of-day summary (once per day), and "Unlock now" in the shop
-  for a fancy recipe you cannot afford yet (once per day). The reward is only given in
+- **Rewarded** ads: see the table in *Progression & reward loop*. The reward is only given when the video finishes. The reward is only given in
   `adFinished`; on `adError` a short message is shown and nothing is lost.
 - `happytime()` is called when a recipe is unlocked (if the SDK supports it).
 - Game audio is suspended while an ad plays.

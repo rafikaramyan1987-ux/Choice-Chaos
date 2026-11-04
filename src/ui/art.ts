@@ -435,19 +435,35 @@ const FUR = ['#f6c89f', '#d99a6c', '#a8794f', '#f1e4d4', '#c4c9d4', '#ffd8a8', '
 const SHIRTS = ['#7fb8e8', '#f28e8e', '#8fd19e', '#ffd166', '#c39bd3', '#f7a072', '#6fc3c3'];
 
 /** Friendly round characters built from simple shapes, varied by seed. */
-export function customer(look: number, mood: Mood): string {
+export type GuestKind = 'bear' | 'cat' | 'bunny' | 'buddy' | 'mouse' | 'fox' | 'panda' | 'frog';
+export type GuestSpecial = 'vip' | 'critic' | 'celebrity';
+const KIND_ORDER: GuestKind[] = ['bear', 'cat', 'bunny', 'buddy', 'mouse'];
+const KIND_FUR: Partial<Record<GuestKind, string>> = { fox: '#f2a65a', panda: '#f7f4ee', frog: '#9ad27a' };
+
+/** Friendly round characters built from simple shapes. `kind` and `special` change the look. */
+export function customer(look: number, mood: Mood, kindIn?: GuestKind | null, special: GuestSpecial | null = null): string {
   const rng = mulberry32(look || hashString('guest'));
-  const fur = FUR[Math.floor(rng() * FUR.length)] as string;
-  const shirt = SHIRTS[Math.floor(rng() * SHIRTS.length)] as string;
-  const kind = Math.floor(rng() * 5); // 0 bear, 1 cat, 2 bunny, 3 round (no ears, hair tuft), 4 mouse
-  const acc = Math.floor(rng() * 5); // 0 none, 1 glasses, 2 beret, 3 bow, 4 scarf
+  const furRnd = FUR[Math.floor(rng() * FUR.length)] as string;
+  const shirt = special === 'vip' ? '#7c5cc4' : special === 'celebrity' ? '#2f2d38' : (SHIRTS[Math.floor(rng() * SHIRTS.length)] as string);
+  const kind: GuestKind = kindIn ?? (KIND_ORDER[Math.floor(rng() * 5)] as GuestKind);
+  const fur = KIND_FUR[kind] ?? furRnd;
+  const acc = special ? 0 : Math.floor(rng() * 5); // 0 none, 1 glasses, 2 beret, 3 bow, 4 scarf
   const inner = '#ffe3e8';
   let ears = '';
-  if (kind === 0) ears = `<circle cx="34" cy="34" r="11" fill="${fur}" ${ST}/><circle cx="86" cy="34" r="11" fill="${fur}" ${ST}/><circle cx="34" cy="34" r="5" fill="${inner}"/><circle cx="86" cy="34" r="5" fill="${inner}"/>`;
-  if (kind === 1) ears = `<path d="M28 46 L32 18 L52 34 Z" fill="${fur}" ${ST}/><path d="M92 46 L88 18 L68 34 Z" fill="${fur}" ${ST}/><path d="M34 38 L35 26 L44 34Z" fill="${inner}"/><path d="M86 38 L85 26 L76 34Z" fill="${inner}"/>`;
-  if (kind === 2) ears = `<ellipse cx="44" cy="16" rx="8" ry="22" fill="${fur}" ${ST} transform="rotate(-8 44 30)"/><ellipse cx="76" cy="16" rx="8" ry="22" fill="${fur}" ${ST} transform="rotate(8 76 30)"/><ellipse cx="44" cy="17" rx="3.5" ry="15" fill="${inner}" transform="rotate(-8 44 30)"/><ellipse cx="76" cy="17" rx="3.5" ry="15" fill="${inner}" transform="rotate(8 76 30)"/>`;
-  if (kind === 4) ears = `<circle cx="30" cy="38" r="15" fill="${fur}" ${ST}/><circle cx="90" cy="38" r="15" fill="${fur}" ${ST}/><circle cx="30" cy="38" r="8" fill="${inner}"/><circle cx="90" cy="38" r="8" fill="${inner}"/>`;
-  const tuft = kind === 3 ? `<path d="M50 28 q4 -14 12 -6 q6 -8 8 4" fill="${fur}" ${ST}/>` : '';
+  if (kind === 'bear') ears = `<circle cx="34" cy="34" r="11" fill="${fur}" ${ST}/><circle cx="86" cy="34" r="11" fill="${fur}" ${ST}/><circle cx="34" cy="34" r="5" fill="${inner}"/><circle cx="86" cy="34" r="5" fill="${inner}"/>`;
+  if (kind === 'cat') ears = `<path d="M28 46 L32 18 L52 34 Z" fill="${fur}" ${ST}/><path d="M92 46 L88 18 L68 34 Z" fill="${fur}" ${ST}/><path d="M34 38 L35 26 L44 34Z" fill="${inner}"/><path d="M86 38 L85 26 L76 34Z" fill="${inner}"/>`;
+  if (kind === 'bunny') ears = `<ellipse cx="44" cy="16" rx="8" ry="22" fill="${fur}" ${ST} transform="rotate(-8 44 30)"/><ellipse cx="76" cy="16" rx="8" ry="22" fill="${fur}" ${ST} transform="rotate(8 76 30)"/><ellipse cx="44" cy="17" rx="3.5" ry="15" fill="${inner}" transform="rotate(-8 44 30)"/><ellipse cx="76" cy="17" rx="3.5" ry="15" fill="${inner}" transform="rotate(8 76 30)"/>`;
+  if (kind === 'mouse') ears = `<circle cx="30" cy="38" r="15" fill="${fur}" ${ST}/><circle cx="90" cy="38" r="15" fill="${fur}" ${ST}/><circle cx="30" cy="38" r="8" fill="${inner}"/><circle cx="90" cy="38" r="8" fill="${inner}"/>`;
+  if (kind === 'fox') ears = `<path d="M26 50 L28 12 L54 32 Z" fill="${fur}" ${ST}/><path d="M94 50 L92 12 L66 32 Z" fill="${fur}" ${ST}/><path d="M29 22 L28 12 L38 20Z M91 22 L92 12 L82 20Z" fill="#6b4433"/>`;
+  if (kind === 'panda') ears = `<circle cx="34" cy="34" r="11" fill="#3a3640" ${ST}/><circle cx="86" cy="34" r="11" fill="#3a3640" ${ST}/>`;
+  if (kind === 'frog') ears = `<circle cx="45" cy="36" r="12" fill="${fur}" ${ST}/><circle cx="75" cy="36" r="12" fill="${fur}" ${ST}/>`;
+  const tuft = kind === 'buddy' ? `<path d="M50 28 q4 -14 12 -6 q6 -8 8 4" fill="${fur}" ${ST}/>` : '';
+  const patches =
+    kind === 'panda'
+      ? `<ellipse cx="48" cy="61" rx="9" ry="11" fill="#3a3640" transform="rotate(20 48 61)"/><ellipse cx="72" cy="61" rx="9" ry="11" fill="#3a3640" transform="rotate(-20 72 61)"/>`
+      : kind === 'fox'
+        ? `<path d="M30 70 q12 -4 22 6 q-8 14 -22 -6z M90 70 q-12 -4 -22 6 q8 14 22 -6z" fill="#fff6ea"/>`
+        : '';
   const dots = `<circle cx="49" cy="61" r="4.5" fill="${OUT}"/><circle cx="71" cy="61" r="4.5" fill="${OUT}"/><circle cx="50.5" cy="59.5" r="1.5" fill="#fff"/><circle cx="72.5" cy="59.5" r="1.5" fill="#fff"/>`;
   const EYES: Record<Mood, string> = {
     happy: `<path d="M44 62 q5 -7 10 0 M66 62 q5 -7 10 0" fill="none" stroke="${OUT}" stroke-width="3.5" stroke-linecap="round"/>`,
@@ -466,37 +482,62 @@ export function customer(look: number, mood: Mood): string {
   const happy = mood === 'happy';
   const eyes = EYES[mood];
   const mouth = MOUTH[mood];
-  const snout = kind === 0 || kind === 4 ? `<ellipse cx="60" cy="71" rx="11" ry="8" fill="#fff3e6" opacity=".9"/><ellipse cx="60" cy="67" rx="3.5" ry="2.5" fill="${OUT}"/>` : kind === 1 ? `<path d="M57 67 h6 l-3 3 z" fill="#e88a9a"/>` : '';
+  const snout = kind === 'bear' || kind === 'mouse' || kind === 'panda' ? `<ellipse cx="60" cy="71" rx="11" ry="8" fill="#fff3e6" opacity=".9"/><ellipse cx="60" cy="67" rx="3.5" ry="2.5" fill="${OUT}"/>` : kind === 'cat' || kind === 'fox' ? `<path d="M56 67 h8 l-4 4 z" fill="${kind === 'fox' ? OUT : '#e88a9a'}"/>` : '';
   let accessory = '';
   if (acc === 1) accessory = `<g fill="rgba(255,255,255,.25)" stroke="${OUT}" stroke-width="2.5"><circle cx="49" cy="61" r="9"/><circle cx="71" cy="61" r="9"/><path d="M58 61 h4"/></g>`;
   if (acc === 2) accessory = `<path d="M30 40 q30 -26 60 0 q-30 -8 -60 0z" fill="#d9534f" ${ST}/><circle cx="60" cy="24" r="3" fill="#d9534f" ${ST}/>`;
   if (acc === 3) accessory = `<g transform="translate(84 36)"><path d="M0 0 l-10 -7 v14 z M0 0 l10 -7 v14 z" fill="#ff7aa2" ${ST}/><circle r="3.5" fill="#ff7aa2" ${ST}/></g>`;
   const scarf = acc === 4 ? `<path d="M34 96 q26 10 52 0 v10 q-26 10 -52 0z" fill="#ffd166" ${ST}/><path d="M70 104 l4 18 h8 l-4 -20z" fill="#ffd166" ${ST}/>` : '';
+  let crown = '';
+  if (special === 'vip')
+    crown = `<path d="M40 30 l4 -16 l9 10 l7 -14 l7 14 l9 -10 l4 16 z" fill="#ffd23f" ${ST}/><circle cx="60" cy="24" r="2.5" fill="#e25d6f"/>`;
+  if (special === 'critic')
+    crown = `<path d="M30 38 q30 -24 60 0 q-30 -8 -60 0z" fill="#3a3640" ${ST}/><circle cx="60" cy="22" r="3" fill="#3a3640"/>` +
+      `<circle cx="71" cy="61" r="9" fill="rgba(255,255,255,.25)" stroke="#c98f1a" stroke-width="2.5"/><path d="M80 63 q6 8 2 18" fill="none" stroke="#c98f1a" stroke-width="1.5"/>`;
+  if (special === 'celebrity')
+    crown = `<g fill="#2f2d38" stroke="${OUT}" stroke-width="2"><rect x="38" y="54" width="19" height="13" rx="5"/><rect x="63" y="54" width="19" height="13" rx="5"/></g><path d="M57 59 h6" stroke="${OUT}" stroke-width="2.5"/>` +
+      `<g class="sparkle" fill="#ffd23f"><path d="M14 30 l3 7 l7 3 l-7 3 l-3 7 l-3 -7 l-7 -3 l7 -3z"/><path d="M104 64 l2 5 l5 2 l-5 2 l-2 5 l-2 -5 l-5 -2 l5 -2z"/></g>`;
+  const badge =
+    special === 'critic'
+      ? `<g transform="translate(78 104)"><rect width="22" height="26" rx="3" fill="#fff" ${ST}/><path d="M5 8 h12 M5 14 h12 M5 20 h8" stroke="#c9b6a6" stroke-width="2"/></g>`
+      : special === 'vip'
+        ? `<path d="M48 98 l12 10 l12 -10" fill="none" stroke="#ffd23f" stroke-width="5" stroke-linecap="round"/>`
+        : '';
   const hearts = happy
     ? `<g class="hearts">${[[20, 30], [100, 24], [96, 54]].map(([x, y], i) => `<path style="animation-delay:${i * 0.15}s" d="M${x} ${y} c-3 -5 -10 -1 0 7 c10 -8 3 -12 0 -7z" fill="#ff6f91"/>`).join('')}</g>`
     : '';
   return svg(
-    `<g class="guest-body"><path d="M22 140 q0 -44 38 -44 q38 0 38 44z" fill="${shirt}" ${ST}/>${scarf}` +
-      `<g class="guest-head">${ears}<circle cx="60" cy="62" r="34" fill="${fur}" ${ST}/>${tuft}` +
+    `<g class="guest-body"><path d="M22 140 q0 -44 38 -44 q38 0 38 44z" fill="${shirt}" ${ST}/>${scarf}${badge}` +
+      `<g class="guest-head">${ears}<circle cx="60" cy="62" r="34" fill="${fur}" ${ST}/>${tuft}${patches}` +
       `<ellipse cx="40" cy="72" rx="6" ry="4" fill="#ff9aa8" opacity=".55"/><ellipse cx="80" cy="72" rx="6" ry="4" fill="#ff9aa8" opacity=".55"/>` +
-      `${snout}${eyes}${mouth}${accessory}</g></g>${hearts}`,
-    `guest mood-${mood}`,
+      `${snout}${kind === 'panda' ? eyes.replace(/fill="#6b4433"/g, 'fill="#fff"').replace(/stroke="#6b4433"/g, 'stroke="#fff"') : eyes}${mouth}${accessory}${crown}</g></g>${hearts}`,
+    `guest mood-${mood} kind-${kind}${special ? ` special-${special}` : ''}`,
     '0 0 120 140',
   );
 }
 
 // ------------------------------------------------------------------ café background
 
-export function cafeBackground(decor: readonly string[]): string {
-  const has = (id: string) => decor.includes(id);
+/**
+ * The café room. `features` holds bought decorations and finished expansions
+ * (tables, terrace, bakery corner, second counter, staff, ice-cream bar, lounge, winter theme).
+ */
+export function cafeBackground(features: readonly string[]): string {
+  const has = (id: string) => features.includes(id);
+  const winter = has('winter');
   let out =
-    `<rect width="360" height="220" fill="var(--wall)"/>` +
-    `<g opacity=".35">${Array.from({ length: 12 }, (_, i) => `<rect x="${i * 32}" y="0" width="14" height="220" fill="var(--wall2)"/>`).join('')}</g>` +
+    `<rect width="360" height="220" fill="${winter ? '#e6edf8' : 'var(--wall)'}"/>` +
+    `<g opacity=".35">${Array.from({ length: 12 }, (_, i) => `<rect x="${i * 32}" y="0" width="14" height="220" fill="${winter ? '#c4d4ec' : 'var(--wall2)'}"/>`).join('')}</g>` +
     `<rect x="0" y="150" width="360" height="70" fill="#c98e62"/>` +
     // window with sky
-    `<g><rect x="22" y="26" width="92" height="84" rx="10" fill="var(--sky)" stroke="#8a5a44" stroke-width="5"/>` +
+    `<g><rect x="22" y="26" width="92" height="84" rx="10" fill="${winter ? '#cfe0f2' : 'var(--sky)'}" stroke="#8a5a44" stroke-width="5"/>` +
     `<circle cx="92" cy="50" r="10" fill="var(--sun)" class="sun"/>` +
-    `<path d="M30 92 q12 -10 24 0 q12 -14 28 0 q10 -8 24 0 v14 h-76z" fill="#a9d98a" opacity=".9"/>` +
+    `<path d="M30 92 q12 -10 24 0 q12 -14 28 0 q10 -8 24 0 v14 h-76z" fill="${winter ? '#fff' : '#a9d98a'}" opacity=".9"/>` +
+    (winter ? `<g fill="#fff" class="snow">${[[34, 40], [52, 56], [80, 36], [100, 70], [44, 76], [70, 60]].map(([x, y]) => `<circle cx="${x}" cy="${y}" r="2.4"/>`).join('')}</g>` : '') +
+    (has('terrace')
+      ? `<g><path d="M48 66 v32" stroke="#8a5a44" stroke-width="2.5"/><path d="M28 68 q20 -22 40 0 z" fill="#f28e8e" stroke="#8a5a44" stroke-width="2"/><path d="M38 68 q10 -20 20 0" fill="#fff" opacity=".8"/>` +
+        `<rect x="38" y="96" width="20" height="3" fill="#8a5a44"/><circle cx="86" cy="92" r="6" fill="#ffd166" stroke="#8a5a44" stroke-width="2"/><path d="M86 98 v8" stroke="#8a5a44" stroke-width="2"/></g>`
+      : '') +
     `<path d="M68 26 v84 M22 68 h92" stroke="#8a5a44" stroke-width="4"/>` +
     `<path d="M18 22 h100 l-8 14 h-84z" fill="#f28e8e" stroke="#8a5a44" stroke-width="3"/>` +
     `<path d="M30 22 l-3 14 M46 22 l-1 14 M62 22 v14 M78 22 l1 14 M94 22 l3 14" stroke="#fff" stroke-width="5" opacity=".7"/></g>` +
@@ -525,6 +566,39 @@ export function cafeBackground(decor: readonly string[]): string {
       `<rect x="294" y="86" width="8" height="18" fill="#f28e8e"/><rect x="302" y="82" width="8" height="22" fill="#7fb8e8"/><rect x="310" y="88" width="8" height="16" fill="#ffd166"/>` +
       `<path d="M326 104 q-4 -16 6 -20 q8 6 2 20z" fill="#7cc35a"/></g>`;
   }
+  // ---- expansions (back of the room)
+  const table = (x: number) =>
+    `<g><rect x="${x - 15}" y="134" width="8" height="14" rx="3" fill="#e07a5f" stroke="#8a5a44" stroke-width="2"/><rect x="${x + 7}" y="134" width="8" height="14" rx="3" fill="#e07a5f" stroke="#8a5a44" stroke-width="2"/>` +
+    `<path d="M${x} 128 v20" stroke="#8a5a44" stroke-width="3"/><ellipse cx="${x}" cy="128" rx="13" ry="4" fill="#f3d2a6" stroke="#8a5a44" stroke-width="2"/><circle cx="${x - 4}" cy="124" r="2.5" fill="#fff" stroke="#8a5a44" stroke-width="1.2"/></g>`;
+  if (has('bakery')) {
+    out += `<g><rect x="118" y="100" width="56" height="5" fill="#8a5a44"/><path d="M118 84 h56" stroke="#8a5a44" stroke-width="2"/>` +
+      `<ellipse cx="130" cy="96" rx="9" ry="5" fill="#e3a050" stroke="#8a5a44" stroke-width="1.5"/><ellipse cx="148" cy="96" rx="9" ry="5" fill="#d48b3b" stroke="#8a5a44" stroke-width="1.5"/><ellipse cx="164" cy="95" rx="7" ry="6" fill="#eab060" stroke="#8a5a44" stroke-width="1.5"/>` +
+      `<path d="M120 80 h52 l-4 -8 h-44z" fill="#ffd1e0" stroke="#8a5a44" stroke-width="1.5"/></g>`;
+  }
+  if (has('aquarium')) {
+    out += `<g><rect x="202" y="74" width="40" height="24" rx="3" fill="#bfe6ff" stroke="#8a5a44" stroke-width="2.5"/><path d="M204 92 q10 -4 18 0 t18 0 v4 h-36z" fill="#e8d7a8"/>` +
+      `<path d="M212 84 q5 -4 10 0 q-5 4 -10 0z M222 84 l4 -3 v6z" fill="#ff9b4a" class="fish"/><path d="M228 90 q-4 -8 0 -12" stroke="#5cb94a" stroke-width="2" fill="none"/></g>`;
+  }
+  if (has('counter2')) {
+    out += `<g><rect x="190" y="116" width="60" height="34" fill="#b5764a" stroke="#8a5a44" stroke-width="2"/><rect x="188" y="112" width="64" height="6" rx="2" fill="#e4a873"/>` +
+      `<rect x="226" y="96" width="18" height="16" rx="3" fill="#d9614c" stroke="#8a5a44" stroke-width="2"/><rect x="231" y="104" width="8" height="6" fill="#fff"/></g>`;
+  }
+  const helper = (x: number, hat: string) =>
+    `<g><circle cx="${x}" cy="106" r="9" fill="#f6c89f" stroke="#6b4433" stroke-width="2"/><circle cx="${x - 3}" cy="105" r="1.5" fill="#6b4433"/><circle cx="${x + 3}" cy="105" r="1.5" fill="#6b4433"/><path d="M${x - 3} 109 q3 3 6 0" stroke="#6b4433" stroke-width="1.5" fill="none"/>${hat}</g>`;
+  if (has('barista')) out += helper(206, `<rect x="198" y="93" width="16" height="5" rx="2" fill="#2f2d38"/>`);
+  if (has('baker')) out += helper(146, `<path d="M137 99 q-2 -10 9 -9 q11 -1 9 9z" fill="#fff" stroke="#6b4433" stroke-width="1.5"/>`);
+  if (has('tables1')) out += table(140);
+  if (has('tables2')) out += table(268);
+  if (has('tables3')) out += table(298);
+  if (has('icebar')) {
+    out += `<g><rect x="316" y="112" width="42" height="38" rx="4" fill="#cfeaff" stroke="#8a5a44" stroke-width="2"/><rect x="320" y="118" width="34" height="12" fill="#fff" opacity=".7"/>` +
+      `<g stroke="#8a5a44" stroke-width="1"><rect x="322" y="120" width="9" height="8" fill="#ffb3c6"/><rect x="333" y="120" width="9" height="8" fill="#fff3d6"/><rect x="344" y="120" width="9" height="8" fill="#a9e3b5"/></g>` +
+      `<path d="M322 112 q15 -14 30 0" fill="#ff8fab" stroke="#8a5a44" stroke-width="1.5"/></g>`;
+  }
+  if (has('fireplace')) {
+    out += `<g><rect x="52" y="104" width="56" height="46" fill="#c96a4a" stroke="#8a5a44" stroke-width="2.5"/><rect x="48" y="100" width="64" height="7" rx="2" fill="#8a5a44"/>` +
+      `<path d="M64 150 v-22 a16 16 0 0 1 32 0 v22z" fill="#3a2a2a"/><g class="flame"><path d="M72 150 q-4 -12 6 -18 q-1 8 4 8 q0 -10 6 -14 q4 12 0 24z" fill="#ff9b3d"/></g></g>`;
+  }
   if (has('plant')) {
     out += `<g><path d="M4 150 l6 -30 h28 l6 30z" fill="#e07a5f" stroke="#8a5a44" stroke-width="3"/>` +
       `<path d="M24 120 q-26 -20 -18 -50 q16 12 18 50 M24 120 q4 -40 24 -54 q6 32 -24 54 M24 120 q-6 -30 -2 -66 q14 26 2 66" fill="#6cbf5a" stroke="#3f8a3a" stroke-width="2.5"/></g>`;
@@ -533,6 +607,17 @@ export function cafeBackground(decor: readonly string[]): string {
     out += `<g class="cat" transform="translate(52 104)"><path d="M-22 6 q0 -16 22 -16 q22 0 22 16z" fill="#f2a65a" stroke="#6b4433" stroke-width="2.5"/>` +
       `<circle cx="-16" cy="-4" r="9" fill="#f2a65a" stroke="#6b4433" stroke-width="2.5"/><path d="M-23 -9 l1 -9 l6 5z M-11 -10 l3 -8 l3 8z" fill="#f2a65a" stroke="#6b4433" stroke-width="2"/>` +
       `<path d="M-20 -4 q2 2 4 0 M-14 -4 q2 2 4 0" stroke="#6b4433" stroke-width="1.8" fill="none"/><path d="M22 4 q12 0 10 -12" fill="none" stroke="#f2a65a" stroke-width="5" stroke-linecap="round" class="tail"/></g>`;
+  }
+  if (has('lounge')) {
+    out += `<g><path d="M6 150 v-22 q0 -10 10 -10 h30 q10 0 10 10 v22z" fill="#8fbcd4" stroke="#8a5a44" stroke-width="2.5"/><rect x="2" y="128" width="10" height="22" rx="4" fill="#7aa8c0" stroke="#8a5a44" stroke-width="2"/><rect x="50" y="128" width="10" height="22" rx="4" fill="#7aa8c0" stroke="#8a5a44" stroke-width="2"/><circle cx="31" cy="132" r="5" fill="#ffd166"/></g>`;
+  }
+  if (has('chandelier')) {
+    out += `<g><path d="M180 0 v14" stroke="#8a5a44" stroke-width="2"/><path d="M160 22 q20 12 40 0" fill="none" stroke="#c9963b" stroke-width="3"/>` +
+      `${[160, 180, 200].map((x) => `<circle class="bulb" cx="${x}" cy="${x === 180 ? 30 : 24}" r="5" fill="#ffe17a"/>`).join('')}<circle cx="180" cy="16" r="4" fill="#c9963b"/></g>`;
+  }
+  if (winter) {
+    out += `<path d="M0 6 q45 14 90 0 q45 14 90 0 q45 14 90 0 q45 14 90 0" fill="none" stroke="#3f8a3a" stroke-width="6"/>` +
+      `${[45, 135, 225, 315].map((x) => `<circle cx="${x}" cy="13" r="4" fill="#e23a4c"/>`).join('')}`;
   }
   return svg(out, 'cafe-bg', '0 0 360 220').replace('<svg ', '<svg preserveAspectRatio="xMidYMax slice" ');
 }
@@ -561,12 +646,30 @@ export const icon = {
   bell: () => svg(`<path d="M22 72 q8 -6 8 -24 a20 20 0 0 1 40 0 q0 18 8 24z" fill="currentColor"/><rect x="16" y="72" width="68" height="8" rx="4" fill="currentColor"/><circle cx="50" cy="22" r="6" fill="currentColor"/>`),
   redo: () => svg(`<path d="M74 52 a26 26 0 1 1 -10 -22" fill="none" stroke="currentColor" stroke-width="9" stroke-linecap="round"/><path d="M70 14 v20 h-20" fill="none" stroke="currentColor" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>`),
   lock: () => svg(`<rect x="24" y="44" width="52" height="40" rx="8" fill="currentColor"/><path d="M34 44 v-10 a16 16 0 0 1 32 0 v10" fill="none" stroke="currentColor" stroke-width="8"/>`),
-  video: () => svg(`<rect x="10" y="22" width="80" height="56" rx="12" fill="currentColor"/><path d="M42 36 L64 50 L42 64Z" fill="#fff"/>`),
+  video: () => svg(`<rect x="10" y="22" width="80" height="56" rx="12" fill="currentColor"/><path d="M42 36 L64 50 L42 64Z" fill="#4f9a7b"/>`),
   heart: (cls = '') => svg(`<path d="M50 84 C10 58 14 22 36 20 C46 19 50 28 50 30 C50 28 54 19 64 20 C86 22 90 58 50 84Z" fill="#ff6f91" stroke="#c94a6a" stroke-width="5"/>`, cls),
   check: () => svg(`<path d="M22 52 L42 72 L80 30" fill="none" stroke="currentColor" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>`),
   back: () => svg(`<path d="M60 20 L30 50 L60 80" fill="none" stroke="currentColor" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>`),
   next: () => svg(`<path d="M40 20 L70 50 L40 80" fill="none" stroke="currentColor" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>`),
   gear: () => svg(`<circle cx="50" cy="50" r="16" fill="none" stroke="currentColor" stroke-width="9"/>${[0, 45, 90, 135, 180, 225, 270, 315].map((a) => `<rect x="45" y="12" width="10" height="16" rx="3" fill="currentColor" transform="rotate(${a} 50 50)"/>`).join('')}`),
+  gem: (cls = 'gem') =>
+    svg(`<path d="M28 18 h44 l18 22 l-40 46 l-40 -46z" fill="#7fd8f0" stroke="#3a8fb7" stroke-width="6" stroke-linejoin="round"/><path d="M10 40 h80 M28 18 l12 22 l10 46 M72 18 l-12 22 l-10 46 M40 40 l10 -22 l10 22" fill="none" stroke="#3a8fb7" stroke-width="3.5" stroke-linejoin="round"/><path d="M30 30 l6 -8" stroke="#fff" stroke-width="5" stroke-linecap="round"/>`, cls),
+  gift: () =>
+    svg(`<rect x="14" y="40" width="72" height="48" rx="6" fill="#ff8fab" stroke="${OUT}" stroke-width="5"/><rect x="8" y="28" width="84" height="16" rx="5" fill="#ffb3c6" stroke="${OUT}" stroke-width="5"/><rect x="44" y="28" width="12" height="60" fill="#ffd23f"/><path d="M50 28 q-22 -22 -26 -4 q2 8 26 4 q24 4 26 -4 q-4 -18 -26 4z" fill="#ffd23f" stroke="${OUT}" stroke-width="4"/>`),
+  calendar: () =>
+    svg(`<rect x="12" y="20" width="76" height="68" rx="10" fill="#fff" stroke="${OUT}" stroke-width="5"/><rect x="12" y="20" width="76" height="20" rx="8" fill="#f28e8e" stroke="${OUT}" stroke-width="5"/><path d="M32 12 v16 M68 12 v16" stroke="${OUT}" stroke-width="6" stroke-linecap="round"/><path d="M50 50 l5 10 l11 1 l-8 7 l3 11 l-11 -6 l-11 6 l3 -11 l-8 -7 l11 -1z" fill="#ffd23f" stroke="#c98f1a" stroke-width="2"/>`),
+  book: () =>
+    svg(`<path d="M50 24 q-18 -10 -38 -4 v62 q20 -6 38 4 q18 -10 38 -4 v-62 q-20 -6 -38 4z" fill="#fff" stroke="${OUT}" stroke-width="5" stroke-linejoin="round"/><path d="M50 24 v62" stroke="${OUT}" stroke-width="4"/><circle cx="30" cy="46" r="7" fill="#ffb3c6"/><circle cx="70" cy="46" r="7" fill="#9ad27a"/><circle cx="30" cy="66" r="7" fill="#7fb8e8"/><circle cx="70" cy="66" r="7" fill="#ffd23f"/>`),
+  trophy: () =>
+    svg(`<path d="M30 14 h40 v22 a20 20 0 0 1 -40 0z" fill="#ffd23f" stroke="#c98f1a" stroke-width="5"/><path d="M30 22 h-14 q0 18 16 18 M70 22 h14 q0 18 -16 18" fill="none" stroke="#c98f1a" stroke-width="5"/><path d="M50 56 v14 M34 86 h32 l-4 -16 h-24z" stroke="#c98f1a" stroke-width="5" fill="#ffd23f"/>`),
+  hammer: () =>
+    svg(`<path d="M24 30 l26 -14 l14 10 l-8 8 l-8 -4 l-20 12z" fill="#aab3bd" stroke="${OUT}" stroke-width="5" stroke-linejoin="round"/><path d="M48 36 l34 44" stroke="#b5764a" stroke-width="11" stroke-linecap="round"/><path d="M48 36 l34 44" stroke="${OUT}" stroke-width="2" stroke-linecap="round" opacity=".3"/>`),
+  crown: () =>
+    svg(`<path d="M14 74 l-4 -46 l22 18 l18 -30 l18 30 l22 -18 l-4 46z" fill="#ffd23f" stroke="#c98f1a" stroke-width="6" stroke-linejoin="round"/><circle cx="50" cy="58" r="6" fill="#e25d6f"/>`),
+  timer: () =>
+    svg(`<circle cx="50" cy="54" r="32" fill="#fff" stroke="${OUT}" stroke-width="6"/><path d="M50 54 v-18 M50 54 l12 8" stroke="${OUT}" stroke-width="6" stroke-linecap="round"/><rect x="42" y="10" width="16" height="10" rx="3" fill="${OUT}"/>`),
+  missions: () =>
+    svg(`<rect x="16" y="12" width="68" height="78" rx="8" fill="#fff" stroke="${OUT}" stroke-width="5"/><path d="M28 34 l5 5 l9 -10 M28 54 l5 5 l9 -10 M28 74 l5 5 l9 -10" fill="none" stroke="#5ccf72" stroke-width="5" stroke-linecap="round"/><path d="M52 34 h20 M52 54 h20 M52 74 h20" stroke="${OUT}" stroke-width="5" stroke-linecap="round"/>`),
   star: (cls = '') => svg(`<path d="M50 8 L62 36 L92 38 L69 58 L76 88 L50 72 L24 88 L31 58 L8 38 L38 36 Z" fill="#ffd23f" stroke="#c98f1a" stroke-width="5" stroke-linejoin="round"/>`, cls),
   hand: () =>
     svg(`<path d="M38 56 V20 a7 7 0 0 1 14 0 v26 l2 -10 a7 7 0 0 1 13 3 l-1 9 l2 -6 a7 7 0 0 1 12 4 l-2 14 q-2 24 -22 30 h-10 q-14 -2 -22 -20 l-10 -18 a7 7 0 0 1 11 -8 z" fill="#fff" stroke="${OUT}" stroke-width="4" stroke-linejoin="round"/>`, 'hand'),
@@ -582,6 +685,25 @@ export function machineIcon(m: string): string {
   return ingredientIcon(m === 'coffee' ? 'coffee' : m === 'oven' ? 'warm' : 'blend');
 }
 
+/** Shop picture of an expansion: the matching part of the café. */
+export function expansionIcon(id: string): string {
+  const boxes: Record<string, string> = {
+    tables1: '116 112 50 42',
+    tables2: '244 112 50 42',
+    tables3: '274 112 50 42',
+    terrace: '18 22 100 92',
+    bakery: '112 66 68 46',
+    counter2: '184 90 72 64',
+    barista: '186 86 46 34',
+    baker: '128 84 40 34',
+    icebar: '308 98 54 56',
+    winter: '0 0 180 120',
+    lounge: '0 112 64 42',
+  };
+  const features = id === 'barista' || id === 'baker' ? [id, 'counter2', 'bakery'] : [id];
+  return cafeBackground(features).replace('preserveAspectRatio="xMidYMax slice" ', '').replace('viewBox="0 0 360 220"', `viewBox="${boxes[id] ?? '0 0 360 220'}"`);
+}
+
 export function decorIcon(id: string): string {
   const big = cafeBackground([id]).replace('preserveAspectRatio="xMidYMax slice" ', '');
   // crop the relevant area of the background for the shop card
@@ -592,6 +714,9 @@ export function decorIcon(id: string): string {
     clock: '180 28 80 52',
     shelf: '246 72 98 44',
     cat: '18 80 70 36',
+    chandelier: '140 -6 80 50',
+    aquarium: '192 60 60 46',
+    fireplace: '40 94 80 60',
   };
   if (id === 'flowers') return counter(['flowers']).replace('viewBox="0 0 360 50"', 'viewBox="290 -40 50 92"');
   return big.replace('viewBox="0 0 360 220"', `viewBox="${boxes[id] ?? '0 0 360 220'}"`);

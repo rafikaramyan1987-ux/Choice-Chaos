@@ -1,77 +1,77 @@
 import { readJSON, removeKey, writeJSON } from './storage';
+import { newProgress, type Progress } from '../core/game';
+import { DECOR_BY_ID, MACHINES, MAX_EQUIPMENT_LEVEL, RECIPE_BY_ID, STARTER_RECIPE } from '../core/recipes';
 
-const KEY = 'choice-chaos.save.v1';
+export const SAVE_KEY = 'cozy-cafe.save.v1';
 
 export interface SaveData {
   version: 1;
-  endings: Record<string, { count: number; first: string }>;
-  stats: {
-    runs: number;
-    bestTurns: number;
-    bestTimeMs: number;
-    totalChoices: number;
-  };
-  daily: { lastDate: string | null; streak: number; lastChoice: number | null };
-  settings: { lang: string | null; muted: boolean };
+  progress: Progress;
+  stats: { customers: number; perfect: number; days: number; earned: number };
+  settings: { lang: string | null; muted: boolean; vibration: boolean };
+  /** Day on which the rewarded "unlock now" was last used (once per day). */
+  rewardUnlockDay: number;
 }
 
 export function emptySave(): SaveData {
   return {
     version: 1,
-    endings: {},
-    stats: { runs: 0, bestTurns: 0, bestTimeMs: 0, totalChoices: 0 },
-    daily: { lastDate: null, streak: 0, lastChoice: null },
-    settings: { lang: null, muted: false },
+    progress: newProgress(),
+    stats: { customers: 0, perfect: 0, days: 0, earned: 0 },
+    settings: { lang: null, muted: false, vibration: true },
+    rewardUnlockDay: 0,
+  };
+}
+
+const num = (v: unknown, fallback: number, min = 0): number =>
+  typeof v === 'number' && Number.isFinite(v) ? Math.max(min, Math.floor(v)) : fallback;
+const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
+
+/** Turns anything read from storage into a valid save (unknown ids dropped, numbers clamped). */
+export function sanitizeSave(raw: unknown): SaveData {
+  const base = emptySave();
+  const data = obj(raw);
+  if (data.version !== 1) return base;
+  const p = obj(data.progress);
+  const recipes = Array.isArray(p.recipes) ? p.recipes.filter((id): id is string => typeof id === 'string' && !!RECIPE_BY_ID[id]) : [];
+  const uniqueRecipes = [...new Set([STARTER_RECIPE, ...recipes])];
+  const eq = obj(p.equipment);
+  const equipment = { ...base.progress.equipment };
+  for (const m of MACHINES) equipment[m] = Math.min(MAX_EQUIPMENT_LEVEL, num(eq[m], 0));
+  const decor = Array.isArray(p.decor) ? [...new Set(p.decor.filter((id): id is string => typeof id === 'string' && !!DECOR_BY_ID[id]))] : [];
+  const st = obj(data.stats);
+  const se = obj(data.settings);
+  return {
+    version: 1,
+    progress: { day: num(p.day, 1, 1), coins: num(p.coins, 0), recipes: uniqueRecipes, equipment, decor },
+    stats: {
+      customers: num(st.customers, 0),
+      perfect: num(st.perfect, 0),
+      days: num(st.days, 0),
+      earned: num(st.earned, 0),
+    },
+    settings: {
+      lang: typeof se.lang === 'string' ? se.lang : null,
+      muted: se.muted === true,
+      vibration: se.vibration !== false,
+    },
+    rewardUnlockDay: num(data.rewardUnlockDay, 0),
   };
 }
 
 export function loadSave(): SaveData {
-  const base = emptySave();
-  const data = readJSON<Partial<SaveData>>(KEY, {});
-  if (!data || typeof data !== 'object') return base;
-  return {
-    version: 1,
-    endings: { ...base.endings, ...(data.endings ?? {}) },
-    stats: { ...base.stats, ...(data.stats ?? {}) },
-    daily: { ...base.daily, ...(data.daily ?? {}) },
-    settings: { ...base.settings, ...(data.settings ?? {}) },
-  };
+  return sanitizeSave(readJSON<unknown>(SAVE_KEY, null));
 }
 
 export function persist(save: SaveData): void {
-  writeJSON(KEY, save);
+  writeJSON(SAVE_KEY, save);
 }
 
+/** Wipes progress but keeps settings. */
 export function resetProgress(save: SaveData): SaveData {
-  removeKey(KEY);
+  removeKey(SAVE_KEY);
   const fresh = emptySave();
-  fresh.settings = save.settings;
+  fresh.settings = { ...save.settings };
   persist(fresh);
   return fresh;
-}
-
-/** Records a finished run. Returns true when the ending is new. */
-export function recordRun(save: SaveData, ending: string, turns: number, timeMs: number, today: string): boolean {
-  const isNew = !save.endings[ending];
-  const entry = save.endings[ending] ?? { count: 0, first: today };
-  entry.count += 1;
-  save.endings[ending] = entry;
-  save.stats.runs += 1;
-  save.stats.totalChoices += turns;
-  save.stats.bestTurns = Math.max(save.stats.bestTurns, turns);
-  save.stats.bestTimeMs = Math.max(save.stats.bestTimeMs, timeMs);
-  persist(save);
-  return isNew;
-}
-
-/** Daily streak: +1 if the previous answer was yesterday (UTC), else reset to 1. */
-export function recordDaily(save: SaveData, today: string, choice: number): void {
-  if (save.daily.lastDate === today) return;
-  const yesterday = new Date(`${today}T00:00:00Z`);
-  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-  const y = yesterday.toISOString().slice(0, 10);
-  save.daily.streak = save.daily.lastDate === y ? save.daily.streak + 1 : 1;
-  save.daily.lastDate = today;
-  save.daily.lastChoice = choice;
-  persist(save);
 }

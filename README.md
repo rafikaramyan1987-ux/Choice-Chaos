@@ -1,16 +1,23 @@
-# Choice Chaos
+# Cozy Café
 
-A mobile-first web game: a short situation appears, you pick one of 2–3 choices, and four meters move —
-💰 Money, ❤️ Relationships, 😊 Happiness, ⭐ Reputation (0–100, start 50). Hit 0 or 100 on any meter and the run
-ends with one of **20 endings** (8 meter endings + 12 special combinations). Every run ends with a shareable
-**archetype card** drawn on a canvas.
+*(working title)*
 
-- 100 original situations (≈70 % humour, ≈30 % serious dilemmas), English + French
-- Follow-up situations: some choices come back later ("you lied to your boss…")
-- Endings collection, best-run stats and a daily "Situation of the day" (same for everyone, UTC date seed)
-- Tap, swipe (left = first choice, right = last choice) or keyboard (`1` `2` `3`, `←` `→`, `↑` for the middle one)
-- CrazyGames HTML5 SDK v3 through a small adapter (no-op everywhere else)
-- No backend, no cookies, no analytics, no external fonts/CDN (the GitHub Pages build makes zero external requests)
+A relaxing, mobile-first cooking game: you run a small warm café-bar. Guests arrive and show their order as
+**pictures** (no reading needed), you prepare it by tapping — or dragging — ingredients in the right order, then
+ring the bell to serve. Happy guests pay coins plus a tip.
+
+- **No losing.** No timer bar, no angry guests, no game over. A wrong ingredient is a gentle "oops" — just pick the
+  right one (or start the item over). Faster and correct service only means a bigger tip.
+- **Days**: 6–10 guests per day, then a calm end-of-day summary (sales, tips, perfect orders).
+- **Progression**: coins unlock recipes (hot drinks, juices, toasties, crepes, pastries, ice cream, smoothies),
+  faster equipment (coffee machine, oven & griddle, blender) and decorations that appear in the café.
+- **Gentle difficulty**: day 1 = one simple recipe; new recipes become available day by day, and combo orders
+  (2–3 items) appear slowly. The recipe strip always shows the steps; after a few idle seconds the right
+  ingredient glows.
+- Everything is drawn in SVG (no image files, no web fonts), sounds are synthesized with WebAudio.
+- Mute button, optional vibration, `prefers-reduced-motion` support, EN/FR, portrait 360px+.
+- Progress saved in `localStorage` (every access in `try/catch`, memory fallback). No cookies, no analytics.
+- The GitHub Pages build makes **zero** external requests.
 
 ## Commands
 
@@ -19,56 +26,48 @@ npm ci                 # install
 npm run dev            # local dev server
 npm run check          # lint + typecheck + unit tests
 npm run build          # production build (GitHub Pages) -> dist/
-npm run test:e2e       # Playwright smoke test at 390px (builds must exist: run `npm run build` first)
-npm run build:crazygames && npm run zip   # CrazyGames build -> choice-chaos-crazygames.zip
+npm run test:e2e       # Playwright smoke test at 390px (run `npm run build` first)
+npm run build:crazygames && npm run zip   # CrazyGames build -> cozy-cafe-crazygames.zip
 ```
 
-Add `?seed=123` to the URL to get a reproducible run order (used by the tests).
+Add `?seed=123` to the URL for reproducible orders (used by tests).
 
-## Editing content (no code needed)
+## Code map
 
 | What | File |
 | --- | --- |
-| Situation structure: effects per choice, `serious`, `art`, follow-up flags (`sets` / `requires`), `tags` | `src/data/situations.json` |
-| All texts (UI, situations, endings, archetypes) per language | `src/i18n/en.json`, `src/i18n/fr.json` |
+| Ingredients, recipes (steps, price, unlock cost, day), equipment, decorations | `src/core/recipes.ts` |
+| Rules: step validation, coins & tips, day generation, unlocks, `DayRun` | `src/core/game.ts` |
+| All drawings (items built layer by layer, guests, café, icons) | `src/ui/art.ts` |
+| Screens & interaction (title, service, summary, shop) | `src/ui/app.ts` |
+| Texts (EN/FR) | `src/i18n/en.json`, `src/i18n/fr.json` |
+| Save data (`cozy-cafe.save.v1`) | `src/platform/save.ts` |
+| Sounds & vibration | `src/platform/audio.ts` |
+| Ads / SDK adapter | `src/platform/ads.ts`, `src/platform/crazygames.ts` |
 
-- A situation's texts are under `situations.<id>` in each language file: `text` (≤ 180 chars) and `choices`
-  (≤ 40 chars each, same order as in `situations.json`).
-- Effects (`fx`) use the keys `money`, `love`, `joy`, `rep`. Values are multiplied by a small escalation factor
-  during a run so every run reaches an ending in ~3–5 minutes (see `escalation()` in `src/core/engine.ts`).
-- Follow-ups: a choice with `"sets": "my_flag"` unlocks the situation with `"requires": "my_flag"`; it is inserted
-  2–4 situations later.
-- Tags: `lie`, `honest`, `kind`, `selfish` feed the archetype and the "Pinocchio" ending.
-- `npm test` validates all content (lengths, translations, flags, art keys).
+### Adding a recipe
 
-### Adding a language (e.g. German)
+1. Add it to `RECIPES` in `src/core/recipes.ts` (`steps` in order, `station`, `price`, `cost`, `day`).
+   A station shows at most 8 ingredient buttons (unit-tested).
+2. New ingredient? Add it to `INGREDIENTS`, draw its button in `ICONS` and its layer in `drawItem` (`src/ui/art.ts`).
+3. Add its name to every language file (`recipes`, `ingredients`). `npm test` checks all of this.
 
-1. Copy `src/i18n/en.json` to `src/i18n/de.json` and translate every value (keep the keys).
-2. In `src/i18n/index.ts`: `import de from './de.json';` and add `de` to `LOCALES`.
+### Tips formula
 
-The language picker and browser detection pick it up automatically; the content tests check it too.
+Guests always pay the full price. `tip = round(price × (0.1 + 0.3 × speed + 0.2 × accuracy))`, at least 1 coin.
+`speed` is 1 up to the par time (3 s + 1.6 s per step) and fades to 0 at 3× par; `accuracy` is 1 / 0.5 / 0.25 / 0
+for 0 / 1 / 2 / 3+ mistakes. Faster machines therefore mean bigger tips. Time with the tab hidden is not counted.
 
-## Real choice statistics later
+## Ads (CrazyGames SDK v3)
 
-There is **no** "x % of players chose this" display, because there is no backend and fake numbers are not allowed.
-`src/platform/stats.ts` defines `ChoiceStatsProvider`; the app uses `NullChoiceStats` (returns `null`, so nothing is
-shown). To add real stats, implement the interface with your API and pass it in `src/main.ts`.
-
-## Ads (CrazyGames)
-
-`src/platform/ads.ts` is the interface, `src/platform/crazygames.ts` the SDK v3 implementation.
-
-- The SDK `<script>` is only injected in the `crazygames` build mode (`vite.config.ts`).
-- `SDK.init()` is awaited before anything else; `loadingStart/loadingStop` around boot;
-  `gameplayStart` while a run is being played, `gameplayStop` on menus, endings and before ads
-  (calls are de-duplicated by `GameplayTracker`).
-- **Midgame** ad only between runs ("Play again"), at most once every 3 minutes (`MidgameThrottle`).
-- **Rewarded** ads: "Undo my last choice" (once per run) and "Second chance" (continue once after a meter ending).
-  The reward is only given in `adFinished`; on `adError` (no fill, adblock) a message is shown and the game continues.
+- The SDK `<script>` is only injected in the `crazygames` build mode (`vite.config.ts`); elsewhere `NoopPlatform`
+  is used and the game works normally (rewarded features are granted directly so they can be tested).
+- `SDK.init()` is awaited first; `loadingStart/loadingStop` around boot; `gameplayStart` while a day is being
+  served, `gameplayStop` on the title, summary and shop screens and before ads (de-duplicated by `GameplayTracker`).
+- **Midgame** ad only between days ("Next day"), never before day 3 is completed, at most once every 3 minutes
+  (`midgameAllowed`, `MidgameThrottle`).
+- **Rewarded** ads: "Double today's coins" on the end-of-day summary (once per day), and "Unlock now" in the shop
+  for a recipe that is available by day but not yet affordable (once per day). The reward is only given in
+  `adFinished`; on `adError` a short message is shown and nothing is lost.
+- `happytime()` is called when a recipe is unlocked (if the SDK supports it).
 - Game audio is suspended while an ad plays.
-- Outside CrazyGames (`NoopPlatform`) no ad is shown and rewarded features are granted directly so they can be tested.
-
-## Storage
-
-Progress is stored in `localStorage` under `choice-chaos.save.v1` (all accesses wrapped in `try/catch`, with an
-in-memory fallback). No cookies.

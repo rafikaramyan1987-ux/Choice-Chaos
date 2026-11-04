@@ -19,6 +19,7 @@ interface CGSDK {
     loadingStop(): void;
     gameplayStart(): void;
     gameplayStop(): void;
+    happytime?(): void;
   };
   ad: {
     requestAd(type: 'midgame' | 'rewarded', callbacks: CGAdCallbacks): void;
@@ -60,6 +61,7 @@ export class CrazyGamesPlatform implements Platform {
   loadingStop(): void { this.safe((s) => s.game.loadingStop()); }
   gameplayStart(): void { this.safe((s) => s.game.gameplayStart()); }
   gameplayStop(): void { this.safe((s) => s.game.gameplayStop()); }
+  happytime(): void { this.safe((s) => s.game.happytime?.()); }
 
   private request(type: 'midgame' | 'rewarded'): Promise<boolean> {
     const sdk = this.sdk;

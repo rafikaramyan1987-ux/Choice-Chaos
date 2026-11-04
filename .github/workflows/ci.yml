@@ -39,6 +39,6 @@ jobs:
           npm run zip
       - uses: actions/upload-artifact@v4
         with:
-          name: choice-chaos-crazygames
-          path: choice-chaos-crazygames.zip
+          name: cozy-cafe-crazygames
+          path: cozy-cafe-crazygames.zip
           retention-days: 30

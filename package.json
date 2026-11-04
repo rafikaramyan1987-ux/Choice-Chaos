@@ -1,9 +1,9 @@
 {
-  "name": "choice-chaos",
+  "name": "cozy-cafe",
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Choice Chaos — a mobile-first web game of absurd (and sometimes serious) choices.",
+  "description": "Cozy Café — a relaxing mobile-first café cooking game.",
   "license": "UNLICENSED",
   "scripts": {
     "dev": "vite",

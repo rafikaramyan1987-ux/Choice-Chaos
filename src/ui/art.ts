@@ -1,143 +1,542 @@
-import type { ArtKey } from '../core/types';
-
 /**
- * Simple vector illustrations drawn in code (no image files).
- * Each scene is 320×180 and shares a background + a central motif.
+ * All pictures are drawn here as inline SVG (no image files, no fonts).
+ * Items are built layer by layer from the steps already added, so the player
+ * sees the drink or dish grow while preparing it.
  */
-const BG: Record<ArtKey, [string, string]> = {
-  office: ['#cfe3ff', '#9ec1f5'], money: ['#d9f7d2', '#9fdc8f'], home: ['#ffe7c7', '#f7c78b'],
-  neighbor: ['#e7dcff', '#bca7f5'], friends: ['#ffd9e6', '#f5a3c0'], heart: ['#ffd6d6', '#f59a9a'],
-  family: ['#fff1c2', '#f5d36b'], travel: ['#c9f0ff', '#7fd0f0'], weird: ['#e0ffe9', '#8be0b0'],
-  food: ['#ffe2cc', '#f5ab7a'], phone: ['#dfe4ff', '#a3aef5'], party: ['#fbd9ff', '#d99af0'],
-  shop: ['#d6f5f0', '#86d6c8'], park: ['#dcf5c9', '#9ad47a'], pet: ['#fff0d9', '#f5c98f'],
-  storm: ['#d3d9e6', '#8b97b3'],
-};
+import { hashString, mulberry32 } from '../core/rng';
 
-const INK = '#2b2340';
+let uid = 0;
+const nextId = (p: string) => `${p}${++uid}`;
 
-function face(cx: number, cy: number, r: number, color: string, mood: 'happy' | 'shock' | 'meh' = 'happy'): string {
-  const mouth =
-    mood === 'happy'
-      ? `<path d="M${cx - r * 0.4} ${cy + r * 0.2} Q${cx} ${cy + r * 0.6} ${cx + r * 0.4} ${cy + r * 0.2}" stroke="${INK}" stroke-width="3" fill="none" stroke-linecap="round"/>`
-      : mood === 'shock'
-        ? `<ellipse cx="${cx}" cy="${cy + r * 0.35}" rx="${r * 0.18}" ry="${r * 0.24}" fill="${INK}"/>`
-        : `<path d="M${cx - r * 0.35} ${cy + r * 0.35} H${cx + r * 0.35}" stroke="${INK}" stroke-width="3" stroke-linecap="round"/>`;
-  return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}" stroke="${INK}" stroke-width="3"/>
-<circle cx="${cx - r * 0.35}" cy="${cy - r * 0.15}" r="${r * 0.11}" fill="${INK}"/>
-<circle cx="${cx + r * 0.35}" cy="${cy - r * 0.15}" r="${r * 0.11}" fill="${INK}"/>${mouth}`;
+export function svg(inner: string, cls = '', viewBox = '0 0 100 100'): string {
+  return `<svg class="${cls}" viewBox="${viewBox}" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">${inner}</svg>`;
 }
 
-const MOTIF: Record<ArtKey, string> = {
-  office: `<rect x="95" y="100" width="130" height="50" rx="6" fill="#8a6b4f" stroke="${INK}" stroke-width="3"/>
-<rect x="120" y="55" width="80" height="50" rx="6" fill="#fff" stroke="${INK}" stroke-width="3"/>
-<rect x="128" y="63" width="64" height="34" rx="3" fill="#7fb1ff"/>
-<path d="M150 105 h20 v8 h-20z" fill="${INK}"/>${face(250, 80, 20, '#ffd7a8', 'shock')}
-<rect x="40" y="70" width="40" height="70" rx="4" fill="#e6e6e6" stroke="${INK}" stroke-width="3"/>
-<rect x="46" y="80" width="28" height="8" fill="#fff" stroke="${INK}" stroke-width="2"/>`,
-  money: `<ellipse cx="160" cy="140" rx="70" ry="14" fill="#e3b93c" stroke="${INK}" stroke-width="3"/>
-<ellipse cx="160" cy="128" rx="60" ry="12" fill="#f5cf4a" stroke="${INK}" stroke-width="3"/>
-<ellipse cx="160" cy="116" rx="50" ry="10" fill="#ffe066" stroke="${INK}" stroke-width="3"/>
-<circle cx="160" cy="70" r="30" fill="#ffe066" stroke="${INK}" stroke-width="3"/>
-<text x="160" y="82" font-size="34" font-weight="900" text-anchor="middle" fill="${INK}" font-family="system-ui,sans-serif">$</text>
-<path d="M90 50 l6 10 M230 45 l-6 12 M240 90 l10 2" stroke="${INK}" stroke-width="3" stroke-linecap="round"/>`,
-  home: `<rect x="100" y="80" width="120" height="75" fill="#fff6e6" stroke="${INK}" stroke-width="3"/>
-<path d="M88 84 L160 30 L232 84 Z" fill="#e85d5d" stroke="${INK}" stroke-width="3" stroke-linejoin="round"/>
-<rect x="145" y="110" width="30" height="45" fill="#8a6b4f" stroke="${INK}" stroke-width="3"/>
-<rect x="112" y="95" width="24" height="22" fill="#7fd0f0" stroke="${INK}" stroke-width="3"/>
-<rect x="184" y="95" width="24" height="22" fill="#7fd0f0" stroke="${INK}" stroke-width="3"/>
-<rect x="190" y="40" width="14" height="26" fill="#b5523b" stroke="${INK}" stroke-width="3"/>`,
-  neighbor: `<rect x="40" y="60" width="90" height="95" fill="#fff" stroke="${INK}" stroke-width="3"/>
-<rect x="190" y="60" width="90" height="95" fill="#fff" stroke="${INK}" stroke-width="3"/>
-<rect x="70" y="105" width="30" height="50" fill="#5d8ae8" stroke="${INK}" stroke-width="3"/>
-<rect x="220" y="105" width="30" height="50" fill="#e8a05d" stroke="${INK}" stroke-width="3"/>
-<path d="M140 150 h40 M145 140 h30 M150 130 h20" stroke="${INK}" stroke-width="3"/>
-${face(85, 82, 14, '#ffd7a8', 'meh')}${face(235, 82, 14, '#c99a6b', 'shock')}`,
-  friends: `${face(110, 95, 30, '#ffd7a8')}${face(160, 85, 32, '#c99a6b')}${face(212, 95, 30, '#f2c79b', 'shock')}
-<path d="M80 160 Q110 125 140 160 M128 165 Q160 120 192 165 M182 160 Q212 125 242 160" fill="#7f8cf0" stroke="${INK}" stroke-width="3"/>`,
-  heart: `<path d="M160 150 C 60 90, 100 25, 160 65 C 220 25, 260 90, 160 150 Z" fill="#ff5c7a" stroke="${INK}" stroke-width="3"/>
-<path d="M120 70 q8 -12 22 -8" stroke="#fff" stroke-width="5" fill="none" stroke-linecap="round"/>
-<path d="M70 50 l10 10 M250 50 l-10 10 M60 110 h12 M248 110 h12" stroke="${INK}" stroke-width="3" stroke-linecap="round"/>`,
-  family: `<rect x="60" y="120" width="200" height="14" rx="4" fill="#8a6b4f" stroke="${INK}" stroke-width="3"/>
-${face(95, 85, 22, '#ffd7a8')}${face(145, 80, 26, '#c99a6b', 'meh')}${face(195, 92, 16, '#f2c79b', 'shock')}${face(235, 86, 20, '#e8b98a')}
-<ellipse cx="160" cy="116" rx="26" ry="8" fill="#fff" stroke="${INK}" stroke-width="3"/>`,
-  travel: `<path d="M60 110 L240 70 L262 78 L250 92 L90 128 Z" fill="#fff" stroke="${INK}" stroke-width="3" stroke-linejoin="round"/>
-<path d="M150 90 L120 50 L140 48 L185 85 Z" fill="#e85d5d" stroke="${INK}" stroke-width="3" stroke-linejoin="round"/>
-<path d="M140 115 L120 150 L138 148 L170 108 Z" fill="#e85d5d" stroke="${INK}" stroke-width="3" stroke-linejoin="round"/>
-<circle cx="200" cy="85" r="4" fill="${INK}"/><circle cx="215" cy="81" r="4" fill="${INK}"/><circle cx="185" cy="89" r="4" fill="${INK}"/>
-<path d="M30 150 q20 -10 40 0 t40 0" stroke="#fff" stroke-width="4" fill="none"/>`,
-  weird: `<ellipse cx="160" cy="80" rx="80" ry="22" fill="#b3b8c9" stroke="${INK}" stroke-width="3"/>
-<path d="M120 72 Q160 20 200 72 Z" fill="#9be8ff" stroke="${INK}" stroke-width="3"/>
-${face(160, 58, 12, '#7be08f', 'shock')}
-<path d="M120 102 L95 160 H225 L200 102 Z" fill="#fff59b" opacity="0.7"/>
-<circle cx="110" cy="82" r="5" fill="#ffe066"/><circle cx="160" cy="88" r="5" fill="#ffe066"/><circle cx="210" cy="82" r="5" fill="#ffe066"/>`,
-  food: `<ellipse cx="160" cy="130" rx="95" ry="22" fill="#fff" stroke="${INK}" stroke-width="3"/>
-<path d="M95 125 Q160 40 225 125 Z" fill="#f5a35d" stroke="${INK}" stroke-width="3"/>
-<circle cx="140" cy="100" r="7" fill="#e85d5d"/><circle cx="175" cy="92" r="7" fill="#7be08f"/><circle cx="190" cy="112" r="7" fill="#e85d5d"/>
-<path d="M140 50 q6 -10 0 -20 M160 46 q6 -10 0 -20 M180 50 q6 -10 0 -20" stroke="${INK}" stroke-width="3" fill="none" stroke-linecap="round"/>`,
-  phone: `<rect x="122" y="22" width="76" height="140" rx="14" fill="${INK}"/>
-<rect x="130" y="36" width="60" height="110" rx="6" fill="#fff"/>
-<rect x="138" y="46" width="40" height="14" rx="7" fill="#7f8cf0"/><rect x="148" y="68" width="34" height="14" rx="7" fill="#ffd166"/>
-<rect x="138" y="90" width="44" height="14" rx="7" fill="#7f8cf0"/>
-<circle cx="230" cy="50" r="16" fill="#ff5c7a" stroke="${INK}" stroke-width="3"/>
-<text x="230" y="57" font-size="20" font-weight="900" text-anchor="middle" fill="#fff" font-family="system-ui,sans-serif">!</text>`,
-  party: `${face(160, 100, 34, '#ffd7a8')}
-<path d="M138 72 L160 18 L182 72 Z" fill="#ffd166" stroke="${INK}" stroke-width="3" stroke-linejoin="round"/>
-<circle cx="160" cy="18" r="6" fill="#ff5c7a" stroke="${INK}" stroke-width="2"/>
-<rect x="60" y="40" width="8" height="8" fill="#ff5c7a" transform="rotate(20 64 44)"/><rect x="250" y="60" width="8" height="8" fill="#7f8cf0" transform="rotate(-20 254 64)"/>
-<rect x="90" y="120" width="8" height="8" fill="#7be08f"/><rect x="230" y="130" width="8" height="8" fill="#ffd166"/>
-<circle cx="70" cy="90" r="16" fill="#7f8cf0" stroke="${INK}" stroke-width="3"/><path d="M70 106 v40" stroke="${INK}" stroke-width="2"/>
-<circle cx="250" cy="100" r="16" fill="#ff5c7a" stroke="${INK}" stroke-width="3"/><path d="M250 116 v40" stroke="${INK}" stroke-width="2"/>`,
-  shop: `<path d="M80 80 h170 l-20 55 h-125 z" fill="#fff" stroke="${INK}" stroke-width="3" stroke-linejoin="round"/>
-<path d="M60 60 h25 l10 20" stroke="${INK}" stroke-width="4" fill="none" stroke-linecap="round"/>
-<circle cx="115" cy="150" r="10" fill="${INK}"/><circle cx="215" cy="150" r="10" fill="${INK}"/>
-<rect x="110" y="55" width="30" height="35" fill="#ff5c7a" stroke="${INK}" stroke-width="3"/>
-<rect x="148" y="45" width="34" height="45" fill="#ffd166" stroke="${INK}" stroke-width="3"/>
-<circle cx="205" cy="70" r="18" fill="#7be08f" stroke="${INK}" stroke-width="3"/>`,
-  park: `<rect x="148" y="90" width="20" height="65" fill="#8a6b4f" stroke="${INK}" stroke-width="3"/>
-<circle cx="158" cy="65" r="45" fill="#5cbf5c" stroke="${INK}" stroke-width="3"/>
-<rect x="40" y="125" width="70" height="8" fill="#8a6b4f" stroke="${INK}" stroke-width="3"/>
-<path d="M48 133 v20 M102 133 v20" stroke="${INK}" stroke-width="3"/>
-<circle cx="260" cy="40" r="20" fill="#ffd166" stroke="${INK}" stroke-width="3"/>
-<ellipse cx="235" cy="145" rx="18" ry="10" fill="#fff" stroke="${INK}" stroke-width="3"/><circle cx="252" cy="137" r="6" fill="#fff" stroke="${INK}" stroke-width="3"/>`,
-  pet: `<ellipse cx="160" cy="125" rx="55" ry="35" fill="#f5a35d" stroke="${INK}" stroke-width="3"/>
-<circle cx="160" cy="80" r="35" fill="#f5a35d" stroke="${INK}" stroke-width="3"/>
-<path d="M132 58 L128 25 L152 48 Z M188 58 L192 25 L168 48 Z" fill="#f5a35d" stroke="${INK}" stroke-width="3" stroke-linejoin="round"/>
-<circle cx="146" cy="78" r="5" fill="${INK}"/><circle cx="174" cy="78" r="5" fill="${INK}"/>
-<path d="M154 92 l6 5 l6 -5" stroke="${INK}" stroke-width="3" fill="none" stroke-linecap="round"/>
-<path d="M120 90 h-25 M120 96 h-22 M200 90 h25 M200 96 h22" stroke="${INK}" stroke-width="2"/>
-<path d="M215 130 q35 -10 25 -45" stroke="${INK}" stroke-width="10" fill="none" stroke-linecap="round"/>
-<path d="M215 130 q35 -10 25 -45" stroke="#f5a35d" stroke-width="5" fill="none" stroke-linecap="round"/>`,
-  storm: `<path d="M90 80 a30 30 0 0 1 40 -30 a38 38 0 0 1 70 5 a28 28 0 0 1 20 50 h-120 a25 25 0 0 1 -10 -25z" fill="#eef0f5" stroke="${INK}" stroke-width="3"/>
-<path d="M165 105 L145 140 H162 L150 172 L190 128 H172 L185 105 Z" fill="#ffd166" stroke="${INK}" stroke-width="3" stroke-linejoin="round"/>
-<path d="M100 120 l-6 14 M120 125 l-6 14 M210 120 l-6 14 M230 115 l-6 14" stroke="#5d8ae8" stroke-width="4" stroke-linecap="round"/>`,
+const OUT = '#6b4433'; // warm outline
+const ST = `stroke="${OUT}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"`;
+
+const COLORS: Record<string, string> = {
+  coffee: '#6b3e26',
+  milk: '#ead2b0',
+  cocoa: '#5a3420',
+  orange: '#ffa630',
+  berries: '#e0457b',
+  banana: '#ffe08a',
+  yogurt: '#fff6ea',
+  mango: '#ffb84d',
 };
 
-export function artSvg(key: ArtKey, label = ''): string {
-  const [top, bottom] = BG[key] ?? BG.weird;
-  const id = `g-${key}`;
-  return `<svg viewBox="0 0 320 180" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${label}" focusable="false">
-<defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${top}"/><stop offset="1" stop-color="${bottom}"/></linearGradient></defs>
-<rect width="320" height="180" fill="url(#${id})"/>
-<circle cx="30" cy="30" r="40" fill="#fff" opacity="0.25"/><circle cx="300" cy="160" r="50" fill="#fff" opacity="0.18"/>
-${MOTIF[key] ?? MOTIF.weird}
-</svg>`;
+function mix(colors: string[]): string {
+  if (colors.length === 0) return '#f4d9b8';
+  const rgb: [number, number, number] = [0, 0, 0];
+  for (const c of colors) {
+    const n = parseInt(c.slice(1), 16);
+    rgb[0] += (n >> 16) & 255;
+    rgb[1] += (n >> 8) & 255;
+    rgb[2] += n & 255;
+  }
+  return `#${rgb.map((v) => Math.round(v / colors.length).toString(16).padStart(2, '0')).join('')}`;
 }
 
-/** Original "Choice Chaos" logo: two diverging arrows over a tilted wordmark. */
-export function logoSvg(): string {
-  return `<svg viewBox="0 0 360 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Choice Chaos">
-<g stroke="${INK}" stroke-width="5" stroke-linejoin="round" stroke-linecap="round">
-<path d="M180 120 L180 80 Q180 50 130 35" fill="none" stroke="#ff5c7a" stroke-width="12"/>
-<path d="M180 80 Q180 50 230 35" fill="none" stroke="#7f8cf0" stroke-width="12"/>
-<path d="M118 22 L140 26 L128 46 Z" fill="#ff5c7a"/>
-<path d="M242 22 L220 26 L232 46 Z" fill="#7f8cf0"/>
-</g>
-<g transform="rotate(-4 180 150)" font-family="system-ui,-apple-system,'Segoe UI',Roboto,sans-serif" font-weight="900" text-anchor="middle">
-<text x="183" y="153" font-size="54" fill="${INK}">CHOICE</text>
-<text x="180" y="150" font-size="54" fill="#ffd166" stroke="${INK}" stroke-width="2">CHOICE</text>
-<text x="183" y="197" font-size="46" fill="${INK}">CHAOS</text>
-<text x="180" y="194" font-size="46" fill="#ff5c7a" stroke="${INK}" stroke-width="2">CHAOS</text>
-</g>
-<circle cx="70" cy="120" r="7" fill="#7be08f"/><circle cx="300" cy="110" r="6" fill="#ffd166"/><circle cx="320" cy="60" r="4" fill="#ff5c7a"/><circle cx="40" cy="70" r="5" fill="#7f8cf0"/>
-</svg>`;
+// ------------------------------------------------------------------ shared parts
+
+const steam = (x: number, y: number) =>
+  `<g class="steam" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" opacity=".85">` +
+  [-10, 0, 10]
+    .map((dx, i) => `<path style="animation-delay:${i * 0.3}s" d="M${x + dx} ${y} q-5 -6 0 -12 q5 -6 0 -12"/>`)
+    .join('') +
+  `</g>`;
+
+const cherry = (x: number, y: number) =>
+  `<path d="M${x} ${y - 5} q2 -9 9 -11" fill="none" stroke="#4f8a3a" stroke-width="2.5" stroke-linecap="round"/>` +
+  `<circle cx="${x}" cy="${y}" r="6.5" fill="#e23a4c" ${ST}/><circle cx="${x - 2}" cy="${y - 2}" r="1.8" fill="#fff" opacity=".7"/>`;
+
+const creamDollop = (x: number, y: number, s = 1) =>
+  `<g transform="translate(${x} ${y}) scale(${s})"><path d="M-14 4 q-4 -9 5 -10 q1 -9 9 -8 q8 -1 9 8 q9 1 5 10 z" fill="#fffdf8" ${ST}/></g>`;
+
+const plate = (y = 82) =>
+  `<ellipse cx="50" cy="${y}" rx="40" ry="8" fill="#fff" ${ST}/><ellipse cx="50" cy="${y - 1}" rx="28" ry="4.5" fill="none" stroke="#e7d7c9" stroke-width="2"/>`;
+
+const croissantShape = (cx: number, cy: number, s = 1) =>
+  `<g transform="translate(${cx} ${cy}) scale(${s})" fill="#eaa43f" ${ST}>` +
+  `<ellipse cx="-24" cy="8" rx="7" ry="6"/><ellipse cx="24" cy="8" rx="7" ry="6"/>` +
+  `<ellipse cx="-14" cy="3" rx="10" ry="9"/><ellipse cx="14" cy="3" rx="10" ry="9"/>` +
+  `<ellipse cx="0" cy="-1" rx="12" ry="12"/></g>`;
+
+const cakeSlice = (y: number) =>
+  `<g ${ST}><path d="M28 ${y + 6} h44 v24 h-44 z" fill="#f7d9a8"/>` +
+  `<rect x="28" y="${y + 16}" width="44" height="4" fill="#e85d75" stroke="none"/>` +
+  `<path d="M26 ${y + 7} q0 -7 8 -7 h32 q8 0 8 7 q-6 4 -12 0 q-6 4 -12 0 q-6 4 -12 0 q-6 4 -12 0 z" fill="#fff0f3"/></g>`;
+
+const breadSlice = (y: number, toasted: boolean, top = false) => {
+  const fill = toasted ? '#e09a45' : '#f5cd8c';
+  if (!top) return `<rect x="20" y="${y}" width="60" height="11" rx="5" fill="${fill}" ${ST}/>`;
+  const lines = toasted
+    ? [34, 46, 58].map((x) => `<path d="M${x} ${y - 13} l8 10" stroke="#9c5a22" stroke-width="3" stroke-linecap="round"/>`).join('')
+    : '';
+  return `<path d="M20 ${y} v-6 q0 -12 14 -12 h32 q14 0 14 12 v6 z" fill="${fill}" ${ST}/>${lines}`;
+};
+
+const scoop = (x: number, y: number, color: string, r = 15) =>
+  `<g ${ST}><path d="M${x - r} ${y} a${r} ${r} 0 0 1 ${2 * r} 0 q-3 6 -7 2 q-4 6 -8 1 q-4 6 -8 0 q-4 5 -${r - 8} -3 z" fill="${color}"/></g>` +
+  `<circle cx="${x - r / 3}" cy="${y - r / 2}" r="3" fill="#fff" opacity=".6"/>`;
+
+const SPRINKLE_COLORS = ['#ff6f91', '#5cc8ff', '#ffd23f', '#8be07a', '#b98cff'];
+const sprinkles = (x: number, y: number, spread = 12) =>
+  Array.from({ length: 9 }, (_, i) => {
+    const a = (i * 137) % 360;
+    const dx = Math.cos(a) * spread * ((i % 3) / 3 + 0.4);
+    const dy = Math.sin(a) * spread * 0.5 - 2;
+    return `<rect x="${(x + dx).toFixed(1)}" y="${(y + dy).toFixed(1)}" width="5" height="2" rx="1" fill="${SPRINKLE_COLORS[i % 5]}" transform="rotate(${a} ${(x + dx).toFixed(1)} ${(y + dy).toFixed(1)})"/>`;
+  }).join('');
+
+const chocoDrizzle = (x1: number, x2: number, y: number) => {
+  let d = `M${x1} ${y}`;
+  const n = 5;
+  const w = (x2 - x1) / n;
+  for (let i = 0; i < n; i++) d += ` q${w / 2} ${i % 2 ? -7 : 7} ${w} 0`;
+  return `<path d="${d}" fill="none" stroke="#5a3420" stroke-width="4.5" stroke-linecap="round"/>`;
+};
+
+const bananaSlice = (x: number, y: number) =>
+  `<circle cx="${x}" cy="${y}" r="5" fill="#fff1a8" stroke="#d8b84a" stroke-width="2"/><circle cx="${x}" cy="${y}" r="1.4" fill="#d8b84a"/>`;
+
+const berry = (x: number, y: number, c: string) => `<circle cx="${x}" cy="${y}" r="4" fill="${c}" stroke="${OUT}" stroke-width="1.5"/>`;
+
+const iceCube = (x: number, y: number, rot: number, size = 13) =>
+  `<rect x="${x}" y="${y}" width="${size}" height="${size}" rx="${size / 4}" fill="#e8f7ff" fill-opacity=".85" stroke="#8fc6e6" stroke-width="2.5" transform="rotate(${rot} ${x + size / 2} ${y + size / 2})"/>`;
+
+// ------------------------------------------------------------------ items
+
+function drawCupItem(steps: string[], vessel: 'cup' | 'glass', fresh: string | null): string {
+  const clip = nextId('c');
+  const isCup = vessel === 'cup';
+  const shape = isCup
+    ? 'M24 30 h48 l-3 50 a7 7 0 0 1 -7 7 h-28 a7 7 0 0 1 -7 -7 z'
+    : 'M28 18 h44 l-5 66 a5 5 0 0 1 -5 5 h-24 a5 5 0 0 1 -5 -5 z';
+  const bottom = isCup ? 87 : 89;
+  const top = isCup ? 30 : 18;
+  const parts: string[] = [];
+  let y = bottom;
+  const liquids = steps.filter((s) => COLORS[s]);
+  const blended = steps.includes('blend');
+  const bandH = isCup ? 17 : 15;
+  if (blended) {
+    const h = Math.min(bottom - top - 4, liquids.length * bandH);
+    y = bottom - h;
+    parts.push(`<rect class="${fresh === 'blend' ? 'pop' : ''}" x="0" y="${y}" width="100" height="${h}" fill="${mix(liquids.map((l) => COLORS[l] as string))}"/>`);
+    parts.push(`<g fill="#fff" opacity=".55"><circle cx="40" cy="${y + 4}" r="2.5"/><circle cx="55" cy="${y + 7}" r="2"/><circle cx="62" cy="${y + 3}" r="1.6"/></g>`);
+  } else {
+    for (const s of steps) {
+      const c = COLORS[s];
+      if (!c) continue;
+      let color = c;
+      // milk poured on a hot drink blends into it
+      if (s === 'milk' && isCup) {
+        const under = liquids[liquids.indexOf(s) - 1];
+        color = under === 'cocoa' ? '#b98463' : '#d9b48a';
+      }
+      y -= bandH;
+      parts.push(`<rect class="${fresh === s ? 'grow' : ''}" x="0" y="${y}" width="100" height="${bandH + 1}" fill="${color}"/>`);
+      if (s === 'berries' || s === 'mango' || s === 'banana') {
+        const dot = s === 'berries' ? '#a8204f' : s === 'mango' ? '#f08a1c' : '#e8c44a';
+        parts.push(`<g fill="${dot}" opacity=".8"><circle cx="38" cy="${y + 5}" r="2.4"/><circle cx="52" cy="${y + 10}" r="2.4"/><circle cx="63" cy="${y + 5}" r="2.4"/></g>`);
+      }
+    }
+  }
+  const inner = `<clipPath id="${clip}"><path d="${shape}"/></clipPath><g clip-path="url(#${clip})">${parts.join('')}</g>`;
+  const handle = isCup ? `<path d="M71 40 h5 a11 11 0 0 1 0 22 h-6" fill="none" stroke="${OUT}" stroke-width="5" stroke-linecap="round"/>` : '';
+  const saucer = isCup ? `<ellipse cx="48" cy="89" rx="34" ry="5" fill="#f3dccb" ${ST}/>` : '';
+  let topping = '';
+  if (steps.includes('foam')) {
+    const fy = Math.min(y, top + 6);
+    topping += `<g class="${fresh === 'foam' ? 'pop' : ''}" fill="#fffaf2" ${ST}><path d="M26 ${fy + 4} q-6 -10 6 -12 q4 -10 16 -6 q12 -6 16 6 q12 2 6 12 z"/></g>` +
+      `<path d="M48 ${fy - 2} c-3 -4 -8 0 0 5 c8 -5 3 -9 0 -5z" fill="#c98c5a"/>`;
+  }
+  if (steps.includes('marshmallow')) {
+    topping += `<g class="${fresh === 'marshmallow' ? 'pop' : ''}" ${ST}><rect x="34" y="${y - 9}" width="13" height="11" rx="3" fill="#ffd1e0" transform="rotate(-12 40 ${y - 4})"/><rect x="50" y="${y - 10}" width="13" height="11" rx="3" fill="#fff" transform="rotate(10 56 ${y - 4})"/></g>`;
+  }
+  if (steps.includes('ice')) {
+    topping += `<g class="${fresh === 'ice' ? 'pop' : ''}">${iceCube(36, y - 4, -12)}${iceCube(52, y - 1, 15)}</g>`;
+  }
+  if (blended) {
+    topping += `<path d="M58 ${y + 10} L70 6" stroke="#ff7aa2" stroke-width="5" stroke-linecap="round"/><path d="M70 6 h8" stroke="#ff7aa2" stroke-width="5" stroke-linecap="round"/>`;
+  }
+  const glassFill = isCup ? 'rgba(255,255,255,.35)' : 'rgba(230,246,255,.35)';
+  const shine = `<path d="M${isCup ? 30 : 34} ${top + 8} v${isCup ? 36 : 50}" stroke="#fff" stroke-width="3.5" stroke-linecap="round" opacity=".7"/>`;
+  return saucer + handle + `<path d="${shape}" fill="${glassFill}"/>` + inner + topping + `<path d="${shape}" fill="none" ${ST}/>` + shine;
+}
+
+function drawSandwich(steps: string[], fresh: string | null): string {
+  const toasted = steps.includes('toast');
+  let y = 70;
+  let out = plate(84) + breadSlice(y, toasted);
+  for (const s of steps.slice(1)) {
+    const cls = fresh === s ? 'pop' : '';
+    if (s === 'ham') {
+      y -= 6;
+      out += `<path class="${cls}" d="M17 ${y + 6} q4 -7 10 -3 q6 -5 12 0 q6 -5 12 0 q6 -5 12 0 q6 -5 12 0 q5 -4 8 3 z" fill="#f49aa6" stroke="#cf6878" stroke-width="2"/>`;
+    } else if (s === 'cheese') {
+      y -= 5;
+      out += `<path class="${cls}" d="M18 ${y} h64 v5 h-12 l-5 7 l-5 -7 h-24 l-5 7 l-5 -7 h-8 z" fill="#ffd34d" stroke="#d9a520" stroke-width="2"/>`;
+    } else if (s === 'tomato') {
+      y -= 7;
+      out += `<g class="${cls}">${[33, 50, 67].map((x) => `<ellipse cx="${x}" cy="${y + 4}" rx="9" ry="4.5" fill="#ee4b3b" stroke="#b9302a" stroke-width="2"/>`).join('')}</g>`;
+    } else if (s === 'lettuce') {
+      y -= 6;
+      out += `<path class="${cls}" d="M16 ${y + 7} q5 -10 10 -3 q5 -8 10 -1 q5 -8 10 -1 q5 -8 10 -1 q5 -8 10 -1 q5 -8 10 -1 q4 -4 6 6 z" fill="#7cc35a" stroke="#4f9238" stroke-width="2"/>`;
+    } else if (s === 'toast') {
+      out += `<g class="${cls}">${breadSlice(y, true, true)}</g>` + steam(50, y - 20);
+    }
+  }
+  return out;
+}
+
+function drawPlate(steps: string[], fresh: string | null): string {
+  let out = plate(82);
+  let top = 78;
+  for (const s of steps.slice(1)) {
+    const cls = fresh === s ? 'pop' : '';
+    if (s === 'croissant') {
+      out += `<g class="${cls}">${croissantShape(50, 66, 1.15)}</g>`;
+      top = 50;
+    } else if (s === 'cake') {
+      out += `<g class="${cls}">${cakeSlice(48)}</g>`;
+      top = 48;
+    } else if (s === 'cream') {
+      out += `<g class="${cls}">${creamDollop(50, top - 2)}</g>`;
+      top -= 12;
+    } else if (s === 'cherry') {
+      out += `<g class="${cls}">${cherry(50, top - 2)}</g>`;
+    } else if (s === 'warm') {
+      out += `<g class="glow"><ellipse cx="50" cy="64" rx="30" ry="14" fill="#ffcf6b" opacity=".35"/></g>` + steam(50, top);
+    }
+  }
+  return out;
+}
+
+function drawIceCream(steps: string[], vessel: 'cone' | 'bowl', fresh: string | null): string {
+  const scoops = steps.filter((s) => s === 'vanilla' || s === 'strawberry');
+  const pos = vessel === 'cone' ? [[50, 50], [50, 30]] : [[39, 60], [61, 60]];
+  let out = '';
+  if (vessel === 'cone') {
+    out += `<g ${ST}><path d="M34 54 L66 54 L50 95 Z" fill="#e8b06a"/></g>` +
+      `<g stroke="#b97a3a" stroke-width="1.6" opacity=".8"><path d="M40 60 L57 80"/><path d="M48 58 L61 72"/><path d="M60 60 L43 80"/><path d="M52 58 L39 70"/></g>`;
+  }
+  let topY = vessel === 'cone' ? 54 : 66;
+  scoops.forEach((s, i) => {
+    const p = pos[i] ?? pos[0];
+    const [x, y] = p as number[];
+    out += `<g class="${fresh === s && steps[steps.length - 1] === s && i === scoops.length - 1 ? 'pop' : ''}">${scoop(x as number, y as number, s === 'vanilla' ? '#fff3d6' : '#ffb3c6')}</g>`;
+    topY = Math.min(topY, (y as number) - 15);
+  });
+  if (vessel === 'bowl') {
+    out += `<path d="M18 62 h64 a32 24 0 0 1 -64 0 z" fill="#bfe3ff" ${ST}/><path d="M40 85 h20 l4 8 h-28 z" fill="#9fd0f5" ${ST}/>` +
+      `<path d="M26 68 q6 10 16 13" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" opacity=".7"/>`;
+  }
+  const cx = 50;
+  if (steps.includes('sprinkles')) out += `<g class="${fresh === 'sprinkles' ? 'pop' : ''}">${sprinkles(cx, topY + 8)}</g>`;
+  if (steps.includes('choco')) out += `<g class="${fresh === 'choco' ? 'pop' : ''}">${chocoDrizzle(vessel === 'cone' ? 37 : 26, vessel === 'cone' ? 63 : 74, topY + 9)}</g>`;
+  if (steps.includes('cherry')) out += `<g class="${fresh === 'cherry' ? 'pop' : ''}">${cherry(cx, topY + 1)}</g>`;
+  return out;
+}
+
+function drawCrepe(steps: string[], fresh: string | null): string {
+  const cooked = steps.includes('cook');
+  let out = `<rect x="44" y="88" width="12" height="11" rx="3" fill="#2f2d38"/><circle cx="50" cy="54" r="40" fill="#3f3d4a" ${ST}/><circle cx="50" cy="54" r="35" fill="#56536a"/>`;
+  out += `<g class="${fresh === 'batter' ? 'grow' : ''}"><circle cx="50" cy="54" r="31" fill="${cooked ? '#e9b45f' : '#f8e8b8'}" stroke="${cooked ? '#c98b3c' : '#e6cf8f'}" stroke-width="2"/></g>`;
+  if (cooked) out += `<g fill="#c98b3c" opacity=".55"><ellipse cx="38" cy="44" rx="4" ry="2.5"/><ellipse cx="62" cy="62" rx="5" ry="3"/><ellipse cx="58" cy="40" rx="3" ry="2"/><ellipse cx="40" cy="66" rx="3" ry="2"/></g>`;
+  for (const s of steps.slice(2)) {
+    const cls = fresh === s ? 'pop' : '';
+    if (s === 'choco') out += `<g class="${cls}">${chocoDrizzle(28, 72, 54)}</g>`;
+    if (s === 'banana') out += `<g class="${cls}">${[[38, 46], [56, 44], [46, 62], [64, 58]].map(([x, y]) => bananaSlice(x as number, y as number)).join('')}</g>`;
+    if (s === 'berries') out += `<g class="${cls}">${[[38, 48, '#d6336c'], [50, 42, '#7b3fa0'], [62, 50, '#d6336c'], [44, 62, '#7b3fa0'], [58, 64, '#d6336c']].map(([x, y, c]) => berry(x as number, y as number, c as string)).join('')}</g>`;
+    if (s === 'cream') out += `<g class="${cls}">${creamDollop(50, 56, 0.9)}</g>`;
+  }
+  return out;
+}
+
+/** Picture of an item made of `steps` (possibly incomplete). `fresh` = step to animate in. */
+export function drawItem(steps: readonly string[], fresh: string | null = null): string {
+  const s = [...steps];
+  const vessel = s[0];
+  let inner: string;
+  switch (vessel) {
+    case 'cup':
+    case 'glass':
+      inner = drawCupItem(s, vessel, fresh);
+      break;
+    case 'bread':
+      inner = drawSandwich(s, fresh);
+      break;
+    case 'plate':
+      inner = drawPlate(s, fresh);
+      break;
+    case 'cone':
+    case 'bowl':
+      inner = drawIceCream(s, vessel, fresh);
+      break;
+    case 'batter':
+      inner = drawCrepe(s, fresh);
+      break;
+    default:
+      inner = `<ellipse cx="50" cy="80" rx="36" ry="9" fill="#000" opacity=".08"/><circle cx="50" cy="52" r="30" fill="none" stroke="#c9a88f" stroke-width="3" stroke-dasharray="6 7"/>`;
+  }
+  return svg(`<g class="${fresh && s.length === 1 ? 'pop' : ''}">${inner}</g>`, 'item');
+}
+
+// ------------------------------------------------------------------ ingredient buttons
+
+const ICONS: Record<string, () => string> = {
+  cup: () => drawCupItem(['cup'], 'cup', null),
+  glass: () => drawCupItem(['glass'], 'glass', null),
+  plate: () => plate(60),
+  cone: () => drawIceCream(['cone'], 'cone', null),
+  bowl: () => drawIceCream(['bowl'], 'bowl', null),
+  coffee: () =>
+    `<rect x="20" y="14" width="60" height="22" rx="8" fill="#d9614c" ${ST}/><rect x="24" y="36" width="10" height="52" fill="#c4503d" ${ST}/>` +
+    `<rect x="66" y="36" width="10" height="52" fill="#c4503d" ${ST}/><rect x="18" y="86" width="64" height="8" rx="3" fill="#8a5a44" ${ST}/>` +
+    `<rect x="42" y="36" width="16" height="9" rx="2" fill="#555" ${ST}/><path d="M50 46 v12" stroke="#6b3e26" stroke-width="4" stroke-linecap="round" class="drip"/>` +
+    `<path d="M38 64 h24 l-3 18 h-18 z" fill="#fff" ${ST}/><circle cx="64" cy="25" r="4" fill="#ffe17a" ${ST}/>`,
+  milk: () =>
+    `<path d="M36 26 h28 v8 l8 12 v42 a4 4 0 0 1 -4 4 h-36 a4 4 0 0 1 -4 -4 v-42 l8 -12 z" fill="#fff" ${ST}/>` +
+    `<rect x="36" y="14" width="28" height="12" rx="3" fill="#5cb5ff" ${ST}/><rect x="28" y="54" width="44" height="18" fill="#cfe9ff"/><path d="M40 63 h20" stroke="#5cb5ff" stroke-width="4" stroke-linecap="round"/>`,
+  foam: () =>
+    `<path d="M30 46 h40 l-4 42 h-32 z" fill="#d7dde4" ${ST}/><path d="M70 54 q12 2 8 16 l-8 4" fill="none" stroke="${OUT}" stroke-width="4"/>` +
+    `<path d="M24 48 q-6 -12 8 -14 q4 -14 18 -8 q14 -8 18 8 q14 2 8 14 z" fill="#fffaf2" ${ST}/>`,
+  cocoa: () =>
+    `<rect x="26" y="22" width="48" height="66" rx="6" fill="#8a4f2e" ${ST}/><rect x="24" y="16" width="52" height="12" rx="4" fill="#b8693c" ${ST}/>` +
+    `<circle cx="50" cy="56" r="15" fill="#f5d8b4" ${ST}/><ellipse cx="50" cy="56" rx="6" ry="9" fill="#6b3e26"/><path d="M50 48 v16" stroke="#f5d8b4" stroke-width="1.5"/>`,
+  marshmallow: () =>
+    `<g ${ST}><rect x="20" y="40" width="30" height="28" rx="7" fill="#ffd1e0" transform="rotate(-10 35 54)"/><rect x="48" y="36" width="30" height="28" rx="7" fill="#fff" transform="rotate(8 63 50)"/>` +
+    `<rect x="34" y="60" width="30" height="26" rx="7" fill="#e9f3ff"/></g>`,
+  orange: () =>
+    `<circle cx="50" cy="56" r="30" fill="#ffa630" ${ST}/><circle cx="50" cy="56" r="22" fill="#ffd27a"/>` +
+    `<g stroke="#ffa630" stroke-width="2.5">${[0, 60, 120].map((a) => `<path d="M${50 - 22 * Math.cos((a * Math.PI) / 180)} ${56 - 22 * Math.sin((a * Math.PI) / 180)} L${50 + 22 * Math.cos((a * Math.PI) / 180)} ${56 + 22 * Math.sin((a * Math.PI) / 180)}"/>`).join('')}</g>` +
+    `<path d="M52 26 q10 -12 20 -6 q-8 10 -20 6z" fill="#6cc04a" ${ST}/>`,
+  ice: () => `${iceCube(18, 44, -14, 30)}${iceCube(50, 30, 12, 30)}${iceCube(40, 58, 4, 26)}`,
+  berries: () =>
+    `<path d="M50 88 q-30 -18 -26 -42 q4 -14 26 -10 q22 -4 26 10 q4 24 -26 42z" fill="#e8344e" ${ST}/>` +
+    `<path d="M36 36 l6 -14 l8 10 l8 -10 l6 14 z" fill="#5cb94a" ${ST}/><g fill="#ffe59a">${[[40, 52], [56, 50], [48, 64], [62, 64], [38, 66], [50, 76]].map(([x, y]) => `<ellipse cx="${x}" cy="${y}" rx="1.6" ry="2.4"/>`).join('')}</g>`,
+  banana: () =>
+    `<path d="M22 34 q4 44 50 46 q10 0 8 -6 q-36 -4 -46 -42 z" fill="#ffe06a" ${ST}/><path d="M22 34 l-2 -8 l6 -1 z" fill="#8a6a2a" ${ST}/>`,
+  yogurt: () =>
+    `<path d="M26 34 h48 l-6 52 h-36 z" fill="#fff" ${ST}/><rect x="22" y="26" width="56" height="10" rx="3" fill="#ff8fb1" ${ST}/>` +
+    `<circle cx="50" cy="62" r="10" fill="#ffd1e0"/><circle cx="47" cy="60" r="3" fill="#e0457b"/>`,
+  mango: () =>
+    `<path d="M50 88 q-30 -6 -28 -34 q4 -28 34 -28 q22 4 20 30 q-2 28 -26 32z" fill="#ffb84d" ${ST}/>` +
+    `<path d="M56 30 q8 -14 22 -12 q-6 14 -22 12z" fill="#6cc04a" ${ST}/><path d="M36 50 q4 -12 14 -14" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" opacity=".7"/>`,
+  blend: () =>
+    `<path d="M30 16 h40 l-6 50 h-28 z" fill="rgba(230,246,255,.7)" ${ST}/><path d="M33 40 h34 l-3 26 h-28 z" fill="#ff9fbf"/>` +
+    `<rect x="28" y="66" width="44" height="24" rx="6" fill="#7aa7d9" ${ST}/><circle cx="50" cy="78" r="5" fill="#fff" ${ST}/><rect x="28" y="10" width="44" height="8" rx="3" fill="#7aa7d9" ${ST}/>`,
+  bread: () =>
+    `<path d="M24 86 v-40 q-8 -2 -8 -12 q0 -14 34 -14 q34 0 34 14 q0 10 -8 12 v40 z" fill="#f5cd8c" ${ST}/>` +
+    `<path d="M30 80 v-36 q-6 -2 -6 -9 q2 -8 26 -8 q24 0 26 8 q0 7 -6 9 v36 z" fill="#fde7bf"/>`,
+  ham: () => `<circle cx="50" cy="54" r="32" fill="#f49aa6" stroke="#cf6878" stroke-width="3"/><circle cx="50" cy="54" r="24" fill="none" stroke="#fde3e7" stroke-width="5"/><circle cx="50" cy="54" r="18" fill="#f7b0ba"/>`,
+  cheese: () =>
+    `<path d="M14 70 L78 36 L88 54 L88 80 L14 80 Z" fill="#ffd34d" stroke="#d9a520" stroke-width="3" stroke-linejoin="round"/>` +
+    `<g fill="#f0b82a"><circle cx="40" cy="70" r="5"/><circle cx="64" cy="60" r="4"/><circle cx="74" cy="72" r="3.5"/></g>`,
+  tomato: () =>
+    `<circle cx="50" cy="56" r="30" fill="#ee4b3b" ${ST}/><path d="M38 30 l12 6 l12 -6 l-4 10 h-16 z" fill="#5cb94a" ${ST}/><circle cx="40" cy="48" r="5" fill="#fff" opacity=".5"/>`,
+  lettuce: () =>
+    `<path d="M50 90 q-38 -10 -32 -46 q10 -20 32 -26 q22 6 32 26 q6 36 -32 46z" fill="#86cf63" stroke="#4f9238" stroke-width="3"/>` +
+    `<path d="M50 88 v-62 M50 60 l-16 -12 M50 70 l16 -14 M50 46 l12 -10" stroke="#4f9238" stroke-width="2.5" fill="none" stroke-linecap="round"/>`,
+  toast: () =>
+    `<rect x="16" y="30" width="68" height="18" rx="6" fill="#b9c2cc" ${ST}/><rect x="16" y="54" width="68" height="18" rx="6" fill="#9aa5b1" ${ST}/>` +
+    `<path d="M84 39 h10" stroke="${OUT}" stroke-width="6" stroke-linecap="round"/><rect x="22" y="72" width="8" height="12" fill="#6b7480"/><rect x="70" y="72" width="8" height="12" fill="#6b7480"/>` +
+    `<circle cx="28" cy="63" r="3.5" fill="#ff5b5b"/><path d="M26 48 h48" stroke="#e09a45" stroke-width="5"/>`,
+  batter: () =>
+    `<path d="M22 44 h52 l-6 40 a6 6 0 0 1 -6 4 h-28 a6 6 0 0 1 -6 -4 z" fill="#f2f2f2" ${ST}/><ellipse cx="48" cy="44" rx="26" ry="6" fill="#f8e8b8" ${ST}/>` +
+    `<path d="M60 40 L82 14" stroke="#aab3bd" stroke-width="4" stroke-linecap="round"/><ellipse cx="57" cy="44" rx="6" ry="9" fill="none" stroke="#aab3bd" stroke-width="3" transform="rotate(40 57 44)"/>`,
+  cook: () =>
+    `<circle cx="46" cy="50" r="30" fill="#3f3d4a" ${ST}/><circle cx="46" cy="50" r="24" fill="#56536a"/><path d="M74 58 l18 12" stroke="${OUT}" stroke-width="7" stroke-linecap="round"/>` +
+    `<g class="flame"><path d="M30 92 q-4 -10 4 -14 q0 6 4 6 q-2 -10 6 -14 q2 10 8 12 q4 -4 2 -8 q10 6 4 18 z" fill="#ff8a3d" stroke="#e8562a" stroke-width="2"/></g>`,
+  warm: () =>
+    `<rect x="16" y="20" width="68" height="64" rx="8" fill="#e8e1d9" ${ST}/><rect x="24" y="34" width="52" height="40" rx="5" fill="#ffb74d" ${ST} class="glow"/>` +
+    `<rect x="24" y="24" width="52" height="6" rx="2" fill="#bfb4a8"/><circle cx="30" cy="27" r="2.5" fill="${OUT}"/><circle cx="40" cy="27" r="2.5" fill="${OUT}"/>` +
+    `<path d="M30 42 q20 -6 40 0" stroke="#fff" stroke-width="3" fill="none" opacity=".6"/>`,
+  choco: () =>
+    `<path d="M36 34 h28 v50 a6 6 0 0 1 -6 6 h-16 a6 6 0 0 1 -6 -6 z" fill="#6b3e26" ${ST}/><path d="M42 34 l4 -16 h8 l4 16 z" fill="#c98c5a" ${ST}/>` +
+    `<rect x="36" y="50" width="28" height="18" fill="#f5d8b4"/><path d="M42 59 q8 -8 16 0" stroke="#6b3e26" stroke-width="3" fill="none"/>`,
+  croissant: () => croissantShape(50, 54, 1.3),
+  cake: () => cakeSlice(30),
+  cream: () =>
+    `<path d="M38 88 h24 l4 -40 h-32 z" fill="#5cb5ff" ${ST}/><rect x="40" y="36" width="20" height="12" rx="3" fill="#dfe7ef" ${ST}/>` +
+    `${creamDollop(50, 30, 1.1)}`,
+  cherry: () => `<g transform="translate(-30 -40) scale(1.6)">${cherry(50, 70)}</g>`,
+  vanilla: () => `${scoop(50, 56, '#fff3d6', 24)}<path d="M30 60 h40 l-6 26 h-28 z" fill="#ffe7a8" ${ST}/>`,
+  strawberry: () => `${scoop(50, 56, '#ffb3c6', 24)}<path d="M30 60 h40 l-6 26 h-28 z" fill="#ffe7a8" ${ST}/>`,
+  sprinkles: () =>
+    `<path d="M30 36 h40 v46 a6 6 0 0 1 -6 6 h-28 a6 6 0 0 1 -6 -6 z" fill="rgba(255,255,255,.8)" ${ST}/><rect x="28" y="24" width="44" height="14" rx="4" fill="#ff8fb1" ${ST}/>` +
+    `<g fill="#ff8fb1"><circle cx="40" cy="31" r="2"/><circle cx="50" cy="31" r="2"/><circle cx="60" cy="31" r="2"/></g>${sprinkles(50, 64, 16)}`,
+};
+
+export function ingredientIcon(id: string): string {
+  const draw = ICONS[id];
+  return svg(draw ? draw() : `<circle cx="50" cy="50" r="30" fill="#ddd"/>`, 'ing-icon');
+}
+
+/** Finished recipe picture (for orders, tray and shop). */
+export function recipeIcon(steps: readonly string[]): string {
+  return drawItem(steps);
+}
+
+// ------------------------------------------------------------------ customers
+
+export type Mood = 'wait' | 'happy' | 'oops';
+
+const FUR = ['#f6c89f', '#d99a6c', '#a8794f', '#f1e4d4', '#c4c9d4', '#ffd8a8', '#e8b4b8', '#b9d7c1', '#c9b6e4'];
+const SHIRTS = ['#7fb8e8', '#f28e8e', '#8fd19e', '#ffd166', '#c39bd3', '#f7a072', '#6fc3c3'];
+
+/** Friendly round characters built from simple shapes, varied by seed. */
+export function customer(look: number, mood: Mood): string {
+  const rng = mulberry32(look || hashString('guest'));
+  const fur = FUR[Math.floor(rng() * FUR.length)] as string;
+  const shirt = SHIRTS[Math.floor(rng() * SHIRTS.length)] as string;
+  const kind = Math.floor(rng() * 5); // 0 bear, 1 cat, 2 bunny, 3 round (no ears, hair tuft), 4 mouse
+  const acc = Math.floor(rng() * 5); // 0 none, 1 glasses, 2 beret, 3 bow, 4 scarf
+  const inner = '#ffe3e8';
+  let ears = '';
+  if (kind === 0) ears = `<circle cx="34" cy="34" r="11" fill="${fur}" ${ST}/><circle cx="86" cy="34" r="11" fill="${fur}" ${ST}/><circle cx="34" cy="34" r="5" fill="${inner}"/><circle cx="86" cy="34" r="5" fill="${inner}"/>`;
+  if (kind === 1) ears = `<path d="M28 46 L32 18 L52 34 Z" fill="${fur}" ${ST}/><path d="M92 46 L88 18 L68 34 Z" fill="${fur}" ${ST}/><path d="M34 38 L35 26 L44 34Z" fill="${inner}"/><path d="M86 38 L85 26 L76 34Z" fill="${inner}"/>`;
+  if (kind === 2) ears = `<ellipse cx="44" cy="16" rx="8" ry="22" fill="${fur}" ${ST} transform="rotate(-8 44 30)"/><ellipse cx="76" cy="16" rx="8" ry="22" fill="${fur}" ${ST} transform="rotate(8 76 30)"/><ellipse cx="44" cy="17" rx="3.5" ry="15" fill="${inner}" transform="rotate(-8 44 30)"/><ellipse cx="76" cy="17" rx="3.5" ry="15" fill="${inner}" transform="rotate(8 76 30)"/>`;
+  if (kind === 4) ears = `<circle cx="30" cy="38" r="15" fill="${fur}" ${ST}/><circle cx="90" cy="38" r="15" fill="${fur}" ${ST}/><circle cx="30" cy="38" r="8" fill="${inner}"/><circle cx="90" cy="38" r="8" fill="${inner}"/>`;
+  const tuft = kind === 3 ? `<path d="M50 28 q4 -14 12 -6 q6 -8 8 4" fill="${fur}" ${ST}/>` : '';
+  const happy = mood === 'happy';
+  const eyes = happy
+    ? `<path d="M44 62 q5 -7 10 0 M66 62 q5 -7 10 0" fill="none" stroke="${OUT}" stroke-width="3.5" stroke-linecap="round"/>`
+    : mood === 'oops'
+      ? `<circle cx="49" cy="61" r="5.5" fill="#fff" stroke="${OUT}" stroke-width="2"/><circle cx="71" cy="61" r="5.5" fill="#fff" stroke="${OUT}" stroke-width="2"/><circle cx="49" cy="62" r="2.6" fill="${OUT}"/><circle cx="71" cy="62" r="2.6" fill="${OUT}"/><path d="M43 50 q6 -5 12 -1 M65 49 q6 -4 12 1" fill="none" stroke="${OUT}" stroke-width="2.5" stroke-linecap="round"/>`
+      : `<g class="blink"><circle cx="49" cy="61" r="4.5" fill="${OUT}"/><circle cx="71" cy="61" r="4.5" fill="${OUT}"/><circle cx="50.5" cy="59.5" r="1.5" fill="#fff"/><circle cx="72.5" cy="59.5" r="1.5" fill="#fff"/></g>`;
+  const mouth = happy
+    ? `<path d="M52 72 q8 10 16 0 z" fill="#e25d6f" stroke="${OUT}" stroke-width="2.5" stroke-linejoin="round"/>`
+    : mood === 'oops'
+      ? `<ellipse cx="60" cy="75" rx="3.5" ry="4" fill="#e25d6f" stroke="${OUT}" stroke-width="2"/>`
+      : `<path d="M54 72 q6 6 12 0" fill="none" stroke="${OUT}" stroke-width="3" stroke-linecap="round"/>`;
+  const snout = kind === 0 || kind === 4 ? `<ellipse cx="60" cy="71" rx="11" ry="8" fill="#fff3e6" opacity=".9"/><ellipse cx="60" cy="67" rx="3.5" ry="2.5" fill="${OUT}"/>` : kind === 1 ? `<path d="M57 67 h6 l-3 3 z" fill="#e88a9a"/>` : '';
+  let accessory = '';
+  if (acc === 1) accessory = `<g fill="rgba(255,255,255,.25)" stroke="${OUT}" stroke-width="2.5"><circle cx="49" cy="61" r="9"/><circle cx="71" cy="61" r="9"/><path d="M58 61 h4"/></g>`;
+  if (acc === 2) accessory = `<path d="M30 40 q30 -26 60 0 q-30 -8 -60 0z" fill="#d9534f" ${ST}/><circle cx="60" cy="24" r="3" fill="#d9534f" ${ST}/>`;
+  if (acc === 3) accessory = `<g transform="translate(84 36)"><path d="M0 0 l-10 -7 v14 z M0 0 l10 -7 v14 z" fill="#ff7aa2" ${ST}/><circle r="3.5" fill="#ff7aa2" ${ST}/></g>`;
+  const scarf = acc === 4 ? `<path d="M34 96 q26 10 52 0 v10 q-26 10 -52 0z" fill="#ffd166" ${ST}/><path d="M70 104 l4 18 h8 l-4 -20z" fill="#ffd166" ${ST}/>` : '';
+  const hearts = happy
+    ? `<g class="hearts">${[[20, 30], [100, 24], [96, 54]].map(([x, y], i) => `<path style="animation-delay:${i * 0.15}s" d="M${x} ${y} c-3 -5 -10 -1 0 7 c10 -8 3 -12 0 -7z" fill="#ff6f91"/>`).join('')}</g>`
+    : '';
+  return svg(
+    `<g class="guest-body"><path d="M22 140 q0 -44 38 -44 q38 0 38 44z" fill="${shirt}" ${ST}/>${scarf}` +
+      `<g class="guest-head">${ears}<circle cx="60" cy="62" r="34" fill="${fur}" ${ST}/>${tuft}` +
+      `<ellipse cx="40" cy="72" rx="6" ry="4" fill="#ff9aa8" opacity=".55"/><ellipse cx="80" cy="72" rx="6" ry="4" fill="#ff9aa8" opacity=".55"/>` +
+      `${snout}${eyes}${mouth}${accessory}</g></g>${hearts}`,
+    `guest mood-${mood}`,
+    '0 0 120 140',
+  );
+}
+
+// ------------------------------------------------------------------ café background
+
+export function cafeBackground(decor: readonly string[]): string {
+  const has = (id: string) => decor.includes(id);
+  let out =
+    `<rect width="360" height="220" fill="var(--wall)"/>` +
+    `<g opacity=".35">${Array.from({ length: 12 }, (_, i) => `<rect x="${i * 32}" y="0" width="14" height="220" fill="var(--wall2)"/>`).join('')}</g>` +
+    `<rect x="0" y="150" width="360" height="70" fill="#c98e62"/>` +
+    // window with sky
+    `<g><rect x="22" y="26" width="92" height="84" rx="10" fill="var(--sky)" stroke="#8a5a44" stroke-width="5"/>` +
+    `<circle cx="92" cy="50" r="10" fill="var(--sun)" class="sun"/>` +
+    `<path d="M30 92 q12 -10 24 0 q12 -14 28 0 q10 -8 24 0 v14 h-76z" fill="#a9d98a" opacity=".9"/>` +
+    `<path d="M68 26 v84 M22 68 h92" stroke="#8a5a44" stroke-width="4"/>` +
+    `<path d="M18 22 h100 l-8 14 h-84z" fill="#f28e8e" stroke="#8a5a44" stroke-width="3"/>` +
+    `<path d="M30 22 l-3 14 M46 22 l-1 14 M62 22 v14 M78 22 l1 14 M94 22 l3 14" stroke="#fff" stroke-width="5" opacity=".7"/></g>` +
+    // menu board (pictures only)
+    `<g><rect x="250" y="28" width="86" height="62" rx="6" fill="#4b5d4f" stroke="#8a5a44" stroke-width="5"/>` +
+    `<path d="M262 46 h20 M262 58 h28 M262 70 h16 M300 46 h22 M300 58 h14 M300 70 h24" stroke="#f3efe2" stroke-width="3" stroke-linecap="round" opacity=".8"/></g>`;
+  if (has('lights')) {
+    out += `<path d="M0 12 q90 26 180 0 q90 26 180 0" fill="none" stroke="#6b4433" stroke-width="2"/>` +
+      Array.from({ length: 11 }, (_, i) => {
+        const x = 16 + i * 33;
+        const y = 12 + Math.sin(((x % 180) / 180) * Math.PI) * 13;
+        const c = ['#ffd166', '#ff8fab', '#8fd3ff', '#b6f09c'][i % 4];
+        return `<circle class="bulb" style="animation-delay:${(i % 4) * 0.4}s" cx="${x}" cy="${y + 5}" r="5" fill="${c}"/>`;
+      }).join('');
+  }
+  if (has('painting')) {
+    out += `<g><rect x="140" y="34" width="56" height="44" rx="4" fill="#fff6e0" stroke="#c9963b" stroke-width="5"/>` +
+      `<circle cx="158" cy="52" r="7" fill="#ffb84d"/><path d="M144 74 l18 -16 l12 10 l10 -8 l10 14z" fill="#7cc35a"/></g>`;
+  }
+  if (has('clock')) {
+    out += `<g transform="translate(220 54)"><circle r="15" fill="#fffaf0" stroke="#8a5a44" stroke-width="4"/><path d="M0 0 v-9 M0 0 l7 4" stroke="#6b4433" stroke-width="3" stroke-linecap="round"/></g>`;
+  }
+  if (has('shelf')) {
+    out += `<g><rect x="250" y="104" width="90" height="6" fill="#8a5a44"/>` +
+      `<rect x="256" y="84" width="14" height="20" rx="3" fill="#ffd1e0" stroke="#8a5a44" stroke-width="2"/><rect x="274" y="80" width="14" height="24" rx="3" fill="#cfe9ff" stroke="#8a5a44" stroke-width="2"/>` +
+      `<rect x="294" y="86" width="8" height="18" fill="#f28e8e"/><rect x="302" y="82" width="8" height="22" fill="#7fb8e8"/><rect x="310" y="88" width="8" height="16" fill="#ffd166"/>` +
+      `<path d="M326 104 q-4 -16 6 -20 q8 6 2 20z" fill="#7cc35a"/></g>`;
+  }
+  if (has('plant')) {
+    out += `<g><path d="M4 150 l6 -30 h28 l6 30z" fill="#e07a5f" stroke="#8a5a44" stroke-width="3"/>` +
+      `<path d="M24 120 q-26 -20 -18 -50 q16 12 18 50 M24 120 q4 -40 24 -54 q6 32 -24 54 M24 120 q-6 -30 -2 -66 q14 26 2 66" fill="#6cbf5a" stroke="#3f8a3a" stroke-width="2.5"/></g>`;
+  }
+  if (has('cat')) {
+    out += `<g class="cat" transform="translate(52 104)"><path d="M-22 6 q0 -16 22 -16 q22 0 22 16z" fill="#f2a65a" stroke="#6b4433" stroke-width="2.5"/>` +
+      `<circle cx="-16" cy="-4" r="9" fill="#f2a65a" stroke="#6b4433" stroke-width="2.5"/><path d="M-23 -9 l1 -9 l6 5z M-11 -10 l3 -8 l3 8z" fill="#f2a65a" stroke="#6b4433" stroke-width="2"/>` +
+      `<path d="M-20 -4 q2 2 4 0 M-14 -4 q2 2 4 0" stroke="#6b4433" stroke-width="1.8" fill="none"/><path d="M22 4 q12 0 10 -12" fill="none" stroke="#f2a65a" stroke-width="5" stroke-linecap="round" class="tail"/></g>`;
+  }
+  return svg(out, 'cafe-bg', '0 0 360 220').replace('<svg ', '<svg preserveAspectRatio="xMidYMax slice" ');
+}
+
+/** Counter top with optional flowers (drawn in front of the customer). */
+export function counter(decor: readonly string[]): string {
+  let out = `<rect x="0" y="10" width="360" height="40" fill="#b5764a"/><rect x="0" y="0" width="360" height="14" rx="4" fill="#e4a873"/>` +
+    `<path d="M0 30 h360" stroke="#9b6038" stroke-width="2" opacity=".6"/>`;
+  if (decor.includes('flowers')) {
+    out += `<g transform="translate(316 -2)"><path d="M-8 2 h16 l-3 -18 h-10z" fill="#8fd3ff" stroke="#6b4433" stroke-width="2"/>` +
+      `<g stroke="#6b4433" stroke-width="1.5"><circle cx="-6" cy="-24" r="6" fill="#ff8fab"/><circle cx="6" cy="-26" r="6" fill="#ffd166"/><circle cx="0" cy="-34" r="6" fill="#b98cff"/></g></g>`;
+  }
+  return svg(out, 'counter', '0 0 360 50');
+}
+
+// ------------------------------------------------------------------ UI icons
+
+export const icon = {
+  coin: (cls = 'coin') =>
+    svg(`<circle cx="50" cy="50" r="40" fill="#ffd23f" stroke="#c98f1a" stroke-width="7"/><circle cx="50" cy="50" r="26" fill="none" stroke="#f0b52a" stroke-width="5"/><path d="M40 34 q10 -6 20 0" stroke="#fff6c4" stroke-width="6" fill="none" stroke-linecap="round"/>`, cls),
+  soundOn: () => svg(`<path d="M18 40 h14 l20 -16 v52 l-20 -16 h-14z" fill="currentColor"/><path d="M64 36 q10 14 0 28 M74 26 q18 24 0 48" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round"/>`),
+  soundOff: () => svg(`<path d="M18 40 h14 l20 -16 v52 l-20 -16 h-14z" fill="currentColor"/><path d="M64 38 l20 24 M84 38 l-20 24" stroke="currentColor" stroke-width="7" stroke-linecap="round"/>`),
+  vibrate: () => svg(`<rect x="34" y="18" width="32" height="64" rx="7" fill="none" stroke="currentColor" stroke-width="7"/><path d="M20 36 v28 M80 36 v28 M10 42 v16 M90 42 v16" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>`),
+  shop: () => svg(`<path d="M20 38 h60 l-6 46 h-48z" fill="currentColor"/><path d="M36 38 v-8 a14 14 0 0 1 28 0 v8" fill="none" stroke="currentColor" stroke-width="7"/>`),
+  play: () => svg(`<path d="M32 20 L80 50 L32 80 Z" fill="currentColor" stroke="currentColor" stroke-width="6" stroke-linejoin="round"/>`),
+  bell: () => svg(`<path d="M22 72 q8 -6 8 -24 a20 20 0 0 1 40 0 q0 18 8 24z" fill="currentColor"/><rect x="16" y="72" width="68" height="8" rx="4" fill="currentColor"/><circle cx="50" cy="22" r="6" fill="currentColor"/>`),
+  redo: () => svg(`<path d="M74 52 a26 26 0 1 1 -10 -22" fill="none" stroke="currentColor" stroke-width="9" stroke-linecap="round"/><path d="M70 14 v20 h-20" fill="none" stroke="currentColor" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>`),
+  lock: () => svg(`<rect x="24" y="44" width="52" height="40" rx="8" fill="currentColor"/><path d="M34 44 v-10 a16 16 0 0 1 32 0 v10" fill="none" stroke="currentColor" stroke-width="8"/>`),
+  video: () => svg(`<rect x="10" y="22" width="80" height="56" rx="12" fill="currentColor"/><path d="M42 36 L64 50 L42 64Z" fill="#fff"/>`),
+  heart: (cls = '') => svg(`<path d="M50 84 C10 58 14 22 36 20 C46 19 50 28 50 30 C50 28 54 19 64 20 C86 22 90 58 50 84Z" fill="#ff6f91" stroke="#c94a6a" stroke-width="5"/>`, cls),
+  check: () => svg(`<path d="M22 52 L42 72 L80 30" fill="none" stroke="currentColor" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>`),
+  back: () => svg(`<path d="M60 20 L30 50 L60 80" fill="none" stroke="currentColor" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>`),
+  next: () => svg(`<path d="M40 20 L70 50 L40 80" fill="none" stroke="currentColor" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>`),
+  gear: () => svg(`<circle cx="50" cy="50" r="16" fill="none" stroke="currentColor" stroke-width="9"/>${[0, 45, 90, 135, 180, 225, 270, 315].map((a) => `<rect x="45" y="12" width="10" height="16" rx="3" fill="currentColor" transform="rotate(${a} 50 50)"/>`).join('')}`),
+  guest: () => svg(`<circle cx="50" cy="36" r="18" fill="currentColor"/><path d="M18 88 q0 -32 32 -32 q32 0 32 32z" fill="currentColor"/>`),
+  jar: () => svg(`<path d="M28 30 h44 v46 a10 10 0 0 1 -10 10 h-24 a10 10 0 0 1 -10 -10z" fill="rgba(255,255,255,.6)" stroke="#6b4433" stroke-width="5"/><rect x="24" y="20" width="52" height="12" rx="4" fill="#8a5a44"/><circle cx="42" cy="68" r="9" fill="#ffd23f" stroke="#c98f1a" stroke-width="3"/><circle cx="58" cy="60" r="9" fill="#ffd23f" stroke="#c98f1a" stroke-width="3"/>`),
+  sun: () => svg(`<circle cx="50" cy="50" r="18" fill="#ffc94d"/>${[0, 45, 90, 135, 180, 225, 270, 315].map((a) => `<rect x="47" y="10" width="6" height="14" rx="3" fill="#ffc94d" transform="rotate(${a} 50 50)"/>`).join('')}`),
+  recipes: () => drawItem(['cup', 'coffee', 'milk', 'foam']),
+  equipment: () => ingredientIcon('coffee'),
+  decor: () => svg(`<path d="M30 92 l4 -22 h32 l4 22z" fill="#e07a5f" stroke="${OUT}" stroke-width="3"/><path d="M50 70 q-30 -20 -20 -50 q18 14 20 50 M50 70 q4 -40 26 -52 q4 32 -26 52" fill="#6cbf5a" stroke="#3f8a3a" stroke-width="3"/>`),
+};
+
+export function machineIcon(m: string): string {
+  return ingredientIcon(m === 'coffee' ? 'coffee' : m === 'oven' ? 'warm' : 'blend');
+}
+
+export function decorIcon(id: string): string {
+  const big = cafeBackground([id]).replace('preserveAspectRatio="xMidYMax slice" ', '');
+  // crop the relevant area of the background for the shop card
+  const boxes: Record<string, string> = {
+    plant: '-20 60 90 95',
+    lights: '0 0 180 40',
+    painting: '120 22 96 64',
+    clock: '180 28 80 52',
+    shelf: '246 72 98 44',
+    cat: '18 80 70 36',
+  };
+  if (id === 'flowers') return counter(['flowers']).replace('viewBox="0 0 360 50"', 'viewBox="290 -40 50 92"');
+  return big.replace('viewBox="0 0 360 220"', `viewBox="${boxes[id] ?? '0 0 360 220'}"`);
 }

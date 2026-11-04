@@ -14,6 +14,8 @@ export interface Platform {
   midgame(): Promise<void>;
   /** Shows a rewarded ad; resolves true if the reward must be granted. */
   rewarded(): Promise<boolean>;
+  /** Celebration moment (e.g. a new recipe unlocked). */
+  happytime(): void;
 }
 
 export interface AdHooks {
@@ -35,6 +37,7 @@ export class NoopPlatform implements Platform {
   async rewarded(): Promise<boolean> {
     return true;
   }
+  happytime(): void {}
 }
 
 export const MIDGAME_INTERVAL_MS = 3 * 60 * 1000;
@@ -46,7 +49,7 @@ export class MidgameThrottle {
     private readonly now: () => number = () => Date.now(),
     private readonly interval = MIDGAME_INTERVAL_MS,
   ) {
-    // Count from session start so the very first run never starts with an ad.
+    // Count from session start so the first days never start with an ad.
     this.last = now();
   }
   canShow(): boolean {
@@ -74,4 +77,11 @@ export class GameplayTracker {
   get isPlaying(): boolean {
     return this.playing;
   }
+}
+
+/** Midgame ads are only shown between days, never before day 3 is completed. */
+export const MIDGAME_FIRST_DAY = 3;
+
+export function midgameAllowed(completedDay: number, throttle: MidgameThrottle): boolean {
+  return completedDay >= MIDGAME_FIRST_DAY && throttle.canShow();
 }

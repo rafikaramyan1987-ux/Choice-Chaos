@@ -14,7 +14,32 @@ export function prefersReducedMotion(): boolean {
   }
 }
 
-export function formatDuration(ms: number): string {
-  const s = Math.round(ms / 1000);
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+export function wait(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Measures active time only (time with the tab hidden is not counted). */
+export class Stopwatch {
+  private startAt = 0;
+  private hiddenAt: number | null = null;
+  private hiddenTotal = 0;
+  constructor() {
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) this.hiddenAt = performance.now();
+      else if (this.hiddenAt !== null) {
+        this.hiddenTotal += performance.now() - this.hiddenAt;
+        this.hiddenAt = null;
+      }
+    });
+  }
+  start(): void {
+    this.startAt = performance.now();
+    this.hiddenTotal = 0;
+    this.hiddenAt = document.hidden ? this.startAt : null;
+  }
+  elapsed(): number {
+    const now = performance.now();
+    const hidden = this.hiddenTotal + (this.hiddenAt !== null ? now - this.hiddenAt : 0);
+    return Math.max(0, now - this.startAt - hidden);
+  }
 }

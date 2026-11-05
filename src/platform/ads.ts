@@ -16,6 +16,24 @@ export interface Platform {
   rewarded(): Promise<boolean>;
   /** Celebration moment (e.g. a new recipe unlocked). */
   happytime(): void;
+  /** Player locale from the platform (e.g. "fr-FR"), or null. */
+  locale(): string | null;
+  /** Why rewarded videos can't be offered right now ('adblock' / 'disabled'), or null when they can. */
+  adsUnavailable(): AdsUnavailable;
+  /** Platform save storage (CrazyGames data module), or null to use localStorage. */
+  storage(): StorageLike | null;
+  /** Platform audio setting (CrazyGames muteAudio); it wins over the in-game toggle. */
+  platformMuted(): boolean;
+  onPlatformMuteChange(cb: (muted: boolean) => void): void;
+}
+
+export type AdsUnavailable = 'adblock' | 'disabled' | null;
+
+/** Same API as localStorage (the CrazyGames data module mirrors it). */
+export interface StorageLike {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
 }
 
 export interface AdHooks {
@@ -38,6 +56,19 @@ export class NoopPlatform implements Platform {
     return true;
   }
   happytime(): void {}
+  locale(): string | null {
+    return null;
+  }
+  adsUnavailable(): AdsUnavailable {
+    return null;
+  }
+  storage(): StorageLike | null {
+    return null;
+  }
+  platformMuted(): boolean {
+    return false;
+  }
+  onPlatformMuteChange(): void {}
 }
 
 export const MIDGAME_INTERVAL_MS = 3 * 60 * 1000;

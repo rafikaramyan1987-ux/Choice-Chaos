@@ -69,10 +69,10 @@ than **2 minutes** pass without a reward or unlock. Across 8 seeds the longest g
 
 | Where | What | Limit |
 | --- | --- | --- |
-| After a 1–2★ order | "Make it 3★" (pays the difference, guest becomes happy) | 3 a day |
+| End-of-day summary | "Make one order 3★" (the weakest one; or 2 gems) | 3 a day |
 | Gift box | ×2 | every 15 min |
 | Daily calendar | ×2 | once a day |
-| Café screen | "VIP now": the first guest of the next day is a VIP | once a day |
+| Café screen | "VIP now": the first guest of the next day is a VIP (or 3 gems) | once a day |
 | Shop → Café | finish a construction now | per construction |
 | Shop → Recipes | unlock the next recipe now | once a day |
 | End of day | ×2 today's coins | once a day |
@@ -86,16 +86,14 @@ npm run check          # lint + typecheck + unit tests
 npm run build          # production build (GitHub Pages) -> dist/
 npm run test:e2e       # Playwright smoke test at 390px (run `npm run build` first)
 npm run build:crazygames && npm run zip   # CrazyGames build -> cozy-cafe-crazygames.zip
-npm run covers         # CrazyGames covers from the game's own SVG art -> covers/*.png
+npm run covers         # CrazyGames covers from the game's own SVG art -> submission/covers/*.png
+npm run videos         # CrazyGames preview videos (bot plays the built game, needs ffmpeg) -> submission/videos/*.mp4
 ```
 
-### CrazyGames covers
+### CrazyGames submission
 
-`covers/cover-1920x1080.png` (landscape 16:9), `covers/cover-800x1200.png` (portrait 2:3) and
-`covers/cover-800x800.png` (square) are rendered by `scripts/covers.mjs` from `src/ui/art.ts` (café, guests,
-a latte, a croissant, minimal text). Re-run `npm run covers` after changing the art.
-
-Add `?seed=123` to the URL for reproducible orders (used by tests).
+Everything for the submission form (covers, preview videos, EN/FR descriptions, controls, tags, the requirements
+checklist and where to get the zip) is in [`submission/README.md`](submission/README.md).
 
 ## Code map
 
@@ -132,9 +130,14 @@ Add `?seed=123` to the URL for reproducible orders (used by tests).
 - The SDK `<script>` is only injected in the `crazygames` build mode (`vite.config.ts`); elsewhere `NoopPlatform`
   is used and the game works normally (rewarded features are granted directly so they can be tested).
 - `SDK.init()` is awaited first; `loadingStart/loadingStop` around boot; `gameplayStart` while a day is being
-  served, `gameplayStop` on the title, summary and shop screens and before ads (de-duplicated by `GameplayTracker`).
-- **Midgame** ad only between days ("Next day"), never before day 3 is completed, at most once every 3 minutes
-  (`midgameAllowed`, `MidgameThrottle`).
+  served, `gameplayStop` on the café, summary and shop screens and before ads (de-duplicated by `GameplayTracker`).
+- New players land directly in gameplay (day 1 starts at once); returning players see the café screen.
+- On CrazyGames, progress is saved with the SDK **data module**, the language comes from `user.systemInfo.locale`
+  and the `muteAudio` setting overrides the in-game sound toggle.
+- Rewarded offers are never shown on the gameplay screen, always look like their no-video alternative and are
+  hidden when ads are disabled (`adsDisabled`) or blocked (with a notice for ad-block users).
+- **Midgame** ad only at the transition to the next day ("Next day", never on a navigation button), never before
+  day 3 is completed, at most once every 3 minutes (`midgameAllowed`, `MidgameThrottle`).
 - **Rewarded** ads: see the table in *Progression & reward loop*. The reward is only given when the video finishes. The reward is only given in
   `adFinished`; on `adError` a short message is shown and nothing is lost.
 - `happytime()` is called when a recipe is unlocked (if the SDK supports it).

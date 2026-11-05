@@ -79,7 +79,7 @@
     "vip": "VIP guest!",
     "critic": "Food critic!",
     "celebrity": "Celebrity!",
-    "redo3": "Make it 3★",
+    "redo3": "Make one order 3★",
     "cafe": "Café",
     "building": "Building…",
     "isReady": "{name} is ready!",
@@ -94,7 +94,12 @@
     "noGems": "Not enough gems",
     "noCoins": "Not enough coins",
     "dailyLimit": "Come back tomorrow",
-    "unlockNow": "Unlock now"
+    "unlockNow": "Unlock now",
+    "adblockNote": "Videos are blocked by your ad blocker — everything else works normally.",
+    "videosOff": "Videos are not available right now.",
+    "watchVideo": "Watch a video",
+    "vipInfo": "The first guest of your next day will be a VIP with big tips.",
+    "redoDone": "Order upgraded to 3★!"
   },
   "recipes": {
     "coffee": "Fresh coffee",

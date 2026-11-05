@@ -80,6 +80,7 @@ import {
   type Mood,
 } from './art';
 import { $, esc, prefersReducedMotion, Stopwatch, wait } from './dom';
+import { appZoom } from './fit';
 
 export interface AppOptions {
   root: HTMLElement;
@@ -89,6 +90,10 @@ export interface AppOptions {
 }
 
 type ShopTab = 'recipes' | 'equipment' | 'decor' | 'cafe';
+
+/** Gem alternatives to rewarded videos (CrazyGames: always offer another way to get the reward). */
+const VIP_GEMS = 3;
+const REDO_GEMS = 2;
 type BookTab = 'stickers' | 'achievements';
 
 interface ActiveAction {
@@ -159,25 +164,65 @@ export class App {
   /** Playing the daily challenge instead of a normal day. */
   private challenge = false;
   private challengeResult: RewardEvent[] | null = null;
+  /** Orders of the current day below 3★ (the summary offers to upgrade one). */
+  private weakOrders: Array<{ items: Order['items']; special: Order['special']; pay: Payment; mods: PayMods }> = [];
 
   constructor(private readonly o: AppOptions) {
     this.save = loadSave();
     this.gameplay = new GameplayTracker(o.platform);
     this.seed = o.seed ?? randomSeed();
     this.rng = mulberry32(this.seed ^ 0x51ed);
-    const lang = this.save.settings.lang ?? detectLanguage(typeof navigator !== 'undefined' ? navigator.languages : undefined);
+    // language: saved choice, else the platform locale (CrazyGames system info), else the browser
+    const platformLocale = o.platform.locale();
+    const lang =
+      this.save.settings.lang ??
+      detectLanguage(platformLocale ? [platformLocale] : typeof navigator !== 'undefined' ? navigator.languages : undefined);
     setLanguage(lang);
-    o.sound.setMuted(this.save.settings.muted);
+    this.applyMute();
+    // the platform's muteAudio setting wins over the in-game toggle
+    o.platform.onPlatformMuteChange(() => this.applyMute());
     fillMissions(this.save.meta, this.p, this.rng);
     persist(this.save);
     // first gesture unlocks audio
     const unlock = () => o.sound.unlock();
     o.root.addEventListener('pointerdown', unlock);
     o.root.addEventListener('keydown', unlock);
+    // iOS suspends audio when the app is backgrounded; resume needs a real gesture (touchend / click)
+    document.addEventListener('touchend', unlock, { passive: true });
+    document.addEventListener('click', unlock);
   }
 
+  /** New players land directly in gameplay; returning players see the café screen. */
   start(): void {
-    this.renderHub();
+    const fresh = this.save.meta.stats.served === 0 && this.p.day === 1 && this.save.stats.customers === 0;
+    if (fresh) void this.startDay();
+    else this.renderHub();
+  }
+
+  private applyMute(): void {
+    this.o.sound.setMuted(this.save.settings.muted || this.o.platform.platformMuted());
+  }
+
+  // ------------------------------------------------------------------ rewarded videos
+
+  /** Rewarded videos can be offered (no ad blocker detected, ads not disabled for this session). */
+  private videosOk(): boolean {
+    return this.o.platform.adsUnavailable() === null;
+  }
+
+  /** Notice shown instead of video buttons when an ad blocker is detected (the game stays fully playable). */
+  private adNote(): string {
+    return this.o.platform.adsUnavailable() === 'adblock' ? `<p class="ad-note">${icon.video()}<span>${esc(t('adblockNote'))}</span></p>` : '';
+  }
+
+  /** Plays a rewarded video. The reward is given only when it finished (never on adError). */
+  private async watchVideo(): Promise<boolean> {
+    const ok = await this.o.platform.rewarded();
+    if (!ok) {
+      const why = this.o.platform.adsUnavailable();
+      this.toast(why === 'adblock' ? t('adblockNote') : why === 'disabled' ? t('videosOff') : t('adUnavailable'), icon.video());
+    }
+    return ok;
   }
 
   // ------------------------------------------------------------------ helpers
@@ -258,7 +303,7 @@ export class App {
   private bindMute(): void {
     $('#mute', this.o.root)?.addEventListener('click', () => {
       this.save.settings.muted = !this.save.settings.muted;
-      this.o.sound.setMuted(this.save.settings.muted);
+      this.applyMute();
       this.persist();
       const b = $('#mute', this.o.root);
       if (b) {
@@ -356,7 +401,7 @@ export class App {
     this.persist();
     const giftOk = giftReady(meta, Date.now());
     const chOk = challengeAvailable(meta, today);
-    const vipOk = meta.level >= CUSTOMER_LEVEL.vip && canUseAd(meta, 'vip', today) && !this.vipNext;
+    const vipOk = meta.level >= CUSTOMER_LEVEL.vip && canUseAd(meta, 'vip', today) && !this.vipNext && (this.videosOk() || this.p.gems >= VIP_GEMS);
     this.o.root.innerHTML = `
       <div class="screen hub-screen">
         <header class="hud">${this.levelPill()}${this.coinPill()}${this.gemPill()}${this.muteButton()}</header>
@@ -371,7 +416,7 @@ export class App {
         <div class="tiles">
           <button class="tile ${giftOk ? 'ready' : ''}" id="gift">${icon.gift()}<span id="gift-label">${giftOk ? esc(t('giftReady')) : fmtTime(meta.giftAt - Date.now())}</span></button>
           <button class="tile ${chOk ? 'ready' : 'done'}" id="challenge">${icon.calendar()}<span>${esc(chOk ? t('challenge') : t('challengeDoneToday'))}</span></button>
-          <button class="tile ad ${vipOk ? '' : 'off'}" id="vip" ${vipOk ? '' : 'disabled'}>${icon.crown()}<span>${esc(this.vipNext ? '✓' : t('callVip'))}</span>${vipOk ? `<i class="ad-badge">${icon.video()}</i>` : ''}</button>
+          <button class="tile ad ${vipOk ? '' : 'off'}" id="vip" ${vipOk ? '' : 'disabled'}>${icon.crown()}<span>${esc(this.vipNext ? '✓' : t('callVip'))}</span>${vipOk && this.videosOk() ? `<i class="ad-badge">${icon.video()}</i>` : ''}</button>
           <button class="tile" id="book">${icon.book()}<span>${esc(t('book'))}</span></button>
           <button class="tile" id="shop">${icon.shop()}<span>${esc(t('shop'))}</span></button>
         </div>
@@ -485,15 +530,11 @@ export class App {
     ).join('');
     const a = await this.modal(
       `<h2>${icon.calendar()}<span>${esc(t('dailyLogin'))}</span></h2><div class="calendar">${cells}</div>
-       <div class="row"><button class="btn" data-a="claim">${esc(t('claim'))}</button><button class="btn reward" data-a="x2">${icon.video()}<span>×2</span></button></div>`,
+       ${this.claimRow()}`,
       'login-modal',
     );
     let mult = 1;
-    if (a === 'x2') {
-      const ok = await this.o.platform.rewarded();
-      if (ok) mult = 2;
-      else this.toast(t('adUnavailable'));
-    }
+    if (a === 'x2' && (await this.watchVideo())) mult = 2;
     const ev = claimLogin(meta, this.p, today, mult);
     if (!ev) return;
     this.sfx('coin');
@@ -501,6 +542,12 @@ export class App {
     await this.showRewards(settleBuilds(meta, this.p, Date.now()));
     this.persist();
     this.updateWallet();
+  }
+
+  /** "Claim" and the optional "×2 with a video" look exactly the same (CrazyGames rewarded-ad rule). */
+  private claimRow(): string {
+    const x2 = this.videosOk() ? `<button class="btn" data-a="x2">${icon.video()}<span>×2</span></button>` : '';
+    return `<div class="row"><button class="btn" data-a="claim">${esc(t('claim'))}</button>${x2}</div>${this.adNote()}`;
   }
 
   private async openGift(): Promise<void> {
@@ -511,15 +558,11 @@ export class App {
     }
     const a = await this.modal(
       `<div class="chest">${icon.gift()}</div><h2>${esc(t('gift'))}</h2>
-       <div class="row"><button class="btn" data-a="claim">${esc(t('claim'))}</button><button class="btn reward" data-a="x2">${icon.video()}<span>×2</span></button></div>`,
+       ${this.claimRow()}`,
       'gift-modal',
     );
     let mult = 1;
-    if (a === 'x2') {
-      const ok = await this.o.platform.rewarded();
-      if (ok) mult = 2;
-      else this.toast(t('adUnavailable'));
-    }
+    if (a === 'x2' && (await this.watchVideo())) mult = 2;
     const ev = claimGift(meta, this.p, Date.now(), this.rng, mult);
     if (ev) {
       this.sfx('coin');
@@ -536,11 +579,14 @@ export class App {
       this.toast(t('dailyLimit'));
       return;
     }
-    const ok = await this.o.platform.rewarded();
-    if (!ok) {
-      this.toast(t('adUnavailable'));
-      return;
-    }
+    const video = this.videosOk() ? `<button class="btn" data-a="video">${icon.video()}<span>${esc(t('watchVideo'))}</span></button>` : '';
+    const gems = `<button class="btn" data-a="gems" ${this.p.gems >= VIP_GEMS ? '' : 'disabled'}>${icon.gem()}<span>${VIP_GEMS}</span></button>`;
+    const a = await this.modal(
+      `<div class="chest">${this.guestPic('vip')}</div><h2>${esc(t('callVip'))}</h2><p class="muted-note">${esc(t('vipInfo'))}</p>
+       <div class="row">${video}${gems}</div>${this.adNote()}<button class="btn subtle-btn" data-a="no">${esc(t('back'))}</button>`,
+    );
+    if (a === 'gems' && this.p.gems >= VIP_GEMS) this.p.gems -= VIP_GEMS;
+    else if (!(a === 'video' && (await this.watchVideo()))) return;
     useAd(meta, 'vip', this.today());
     this.vipNext = true;
     this.persist();
@@ -773,8 +819,9 @@ export class App {
     if (!btn || !station) return;
     const b = btn.getBoundingClientRect();
     const s = station.getBoundingClientRect();
-    hand.style.left = `${b.left - s.left + b.width / 2 - 10}px`;
-    hand.style.top = `${b.top - s.top + b.height / 2 - 6}px`;
+    const z = appZoom(); // screen px → CSS px inside the (possibly zoomed) app
+    hand.style.left = `${(b.left - s.left + b.width / 2) / z - 10}px`;
+    hand.style.top = `${(b.top - s.top + b.height / 2) / z - 6}px`;
     hand.className = `hand-hint show-${kind}`;
   }
 
@@ -1081,7 +1128,7 @@ export class App {
     const before = this.p.coins;
     const fx = cafeEffects(this.save.meta, Date.now());
     const mods: PayMods = { tipBonus: fx.tipBonus, bonusStations: fx.bonusStations };
-    let pay = run.serve(this.watch.elapsed(), mods) as Payment;
+    const pay = run.serve(this.watch.elapsed(), mods) as Payment;
     this.p.coins += pay.total;
     this.p.gems += pay.gems;
     this.save.stats.customers += 1;
@@ -1099,19 +1146,9 @@ export class App {
     this.showGuestReaction(order, pay.stars);
     setTimeout(() => this.sfx(pay.stars === 3 ? 'happy' : pay.stars === 2 ? 'good' : 'soft'), 150);
     this.showPayment(pay, before);
-    // optional rewarded video: turn a 1–2★ order into 3★ (a few times a day)
-    if (pay.stars < 3 && canUseAd(this.save.meta, 'redo', this.today())) {
-      const extra = await this.offerRedo(order, pay, mods);
-      if (extra) {
-        run.summary.base += extra.paid;
-        run.summary.tips += extra.tip;
-        run.summary.earned += extra.total;
-        run.summary.gems += extra.gems;
-        run.summary.perfect += 1;
-        run.summary.stars += 3 - pay.stars;
-        pay = { ...pay, stars: 3, paid: pay.paid + extra.paid, tip: pay.tip + extra.tip, total: pay.total + extra.total, gems: pay.gems + extra.gems };
-      }
-    } else await wait(this.ms(1600));
+    // orders below 3★ can be upgraded on the end-of-day summary (never on the gameplay screen)
+    if (pay.stars < 3) this.weakOrders.push({ items: order.items, special: order.special, pay, mods });
+    await wait(this.ms(1600));
     if (this.challenge) {
       const el = $('#challenge-stars', this.o.root);
       if (el) el.textContent = `${run.summary.stars}/${CHALLENGE_STARS}`;
@@ -1144,53 +1181,6 @@ export class App {
     guest.dataset.stars = String(stars);
   }
 
-  /** Shows the optional "Make it 3★" video button for a short while. Resolves with the extra payment. */
-  private offerRedo(order: Order, pay: Payment, mods: PayMods): Promise<Payment | null> {
-    return new Promise((resolve) => {
-      const fx = $('#fx', this.o.root);
-      if (!fx) {
-        resolve(null);
-        return;
-      }
-      const btn = document.createElement('button');
-      btn.className = 'redo-ad';
-      btn.id = 'redo-ad';
-      btn.innerHTML = `${icon.video()}<span>${esc(t('redo3'))}</span>`;
-      fx.appendChild(btn);
-      let done = false;
-      const finish = (v: Payment | null) => {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        btn.remove();
-        resolve(v);
-      };
-      const timer = setTimeout(() => finish(null), this.reduced ? 2500 : 3200);
-      btn.addEventListener('click', () => {
-        clearTimeout(timer);
-        btn.disabled = true;
-        void this.o.platform.rewarded().then(async (ok) => {
-          if (!ok) {
-            this.toast(t('adUnavailable'));
-            finish(null);
-            return;
-          }
-          useAd(this.save.meta, 'redo', this.today());
-          const extra = DayRun.upgradeTo3(pay, order.items, { ...mods, special: order.special });
-          const before = this.p.coins;
-          this.p.coins += extra.total;
-          this.p.gems += extra.gems;
-          this.persist();
-          this.showGuestReaction(order, 3);
-          this.sfx('happy');
-          this.showPayment({ ...extra, stars: 3 }, before);
-          await wait(this.ms(1200));
-          finish(extra);
-        });
-      });
-    });
-  }
-
   private showPayment(pay: Payment, before: number): void {
     const fx = $('#fx', this.o.root);
     if (fx) {
@@ -1208,13 +1198,14 @@ export class App {
           const c = document.createElement('div');
           c.className = 'fly-coin';
           c.innerHTML = icon.coin();
-          const sx = origin.width / 2 + (i % 3) * 14 - 14;
-          const sy = origin.height * 0.45;
+          const z = appZoom();
+          const sx = origin.width / z / 2 + (i % 3) * 14 - 14;
+          const sy = (origin.height / z) * 0.45;
           c.style.left = `${sx}px`;
           c.style.top = `${sy}px`;
           if (target) {
-            c.style.setProperty('--tx', `${target.left + target.width / 2 - origin.left - sx - 14}px`);
-            c.style.setProperty('--ty', `${target.top + target.height / 2 - origin.top - sy - 14}px`);
+            c.style.setProperty('--tx', `${(target.left + target.width / 2 - origin.left) / z - sx - 14}px`);
+            c.style.setProperty('--ty', `${(target.top + target.height / 2 - origin.top) / z - sy - 14}px`);
           }
           c.style.animationDelay = `${300 + i * 70}ms`;
           fx.appendChild(c);
@@ -1253,6 +1244,7 @@ export class App {
     }
     this.persist();
     this.lastSummaryDoubled = false;
+    this.weakOrders = [];
     this.renderPlay();
     this.sfx('day');
     const banner = document.createElement('div');
@@ -1311,7 +1303,9 @@ export class App {
         </section>
         ${this.missionsCard()}
         <div class="menu">
-          ${s.earned > 0 && !this.lastSummaryDoubled ? `<button class="btn reward" id="double">${icon.video()}<span>${esc(t('double'))}</span><b>×2</b></button>` : ''}
+          ${s.earned > 0 && !this.lastSummaryDoubled && this.videosOk() ? `<button class="btn" id="double">${icon.video()}<span>${esc(t('double'))}</span><b>×2</b></button>` : ''}
+          ${this.redoOffer()}
+          ${this.adNote()}
           <div class="row">
             <button class="btn" id="hub">${icon.back()}<span>${esc(t('toCafe'))}</span></button>
             <button class="btn" id="shop">${icon.shop()}<span>${esc(t('shop'))}</span></button>
@@ -1322,16 +1316,18 @@ export class App {
     this.bindMute();
     this.bindMissions(() => this.renderSummary());
     $('#double', this.o.root)?.addEventListener('click', () => void this.doubleCoins());
+    $('#redo-video', this.o.root)?.addEventListener('click', () => void this.redoWeakest('video'));
+    $('#redo-gems', this.o.root)?.addEventListener('click', () => void this.redoWeakest('gems'));
     $('#hub', this.o.root)?.addEventListener('click', () => {
       this.sfx('tap');
-      void this.leaveSummary(() => this.renderHub());
+      this.leaveSummary(() => this.renderHub());
     });
     $('#shop', this.o.root)?.addEventListener('click', () => {
       this.sfx('tap');
       this.shopReturn = () => this.renderSummary();
       this.renderShop();
     });
-    $('#next', this.o.root)?.addEventListener('click', () => void this.leaveSummary(() => void this.startDay()));
+    $('#next', this.o.root)?.addEventListener('click', () => void this.goNextDay());
   }
 
   private async doubleCoins(): Promise<void> {
@@ -1339,10 +1335,8 @@ export class App {
     const btn = $('#double', this.o.root) as HTMLButtonElement | null;
     if (!run || this.lastSummaryDoubled || !btn) return;
     btn.disabled = true;
-    const ok = await this.o.platform.rewarded();
-    if (!ok) {
-      btn.disabled = false;
-      this.toast(t('adUnavailable'));
+    if (!(await this.watchVideo())) {
+      this.renderSummary();
       return;
     }
     this.lastSummaryDoubled = true;
@@ -1353,15 +1347,62 @@ export class App {
     this.renderSummary();
   }
 
-  /** Midgame ad only between days (after day 3, max once every 3 minutes). */
-  private async leaveSummary(next: () => void): Promise<void> {
+  /** "Make one order 3★": the weakest order of the day, with a video or gems (alternative). */
+  private redoOffer(): string {
+    if (!this.weakOrders.length || !canUseAd(this.save.meta, 'redo', this.today())) return '';
+    const video = this.videosOk() ? `<button class="btn" id="redo-video">${icon.video()}<span>${esc(t('redo3'))}</span></button>` : '';
+    const gems = `<button class="btn" id="redo-gems" ${this.p.gems >= REDO_GEMS ? '' : 'disabled'}>${icon.gem()}<span>${REDO_GEMS} · ${esc(t('redo3'))}</span></button>`;
+    return `<div class="row redo-row">${video}${gems}</div>`;
+  }
+
+  private async redoWeakest(how: 'video' | 'gems'): Promise<void> {
+    const run = this.run;
+    if (!run || !this.weakOrders.length) return;
+    // the order that gains the most
+    const scored = this.weakOrders.map((w) => ({ w, extra: DayRun.upgradeTo3(w.pay, w.items, { ...w.mods, special: w.special }) }));
+    scored.sort((a, b) => b.extra.total - a.extra.total);
+    const best = scored[0];
+    if (!best) return;
+    if (how === 'gems') {
+      if (this.p.gems < REDO_GEMS) return;
+      this.p.gems -= REDO_GEMS;
+    } else {
+      this.o.root.querySelectorAll<HTMLButtonElement>('.redo-row button').forEach((b) => (b.disabled = true));
+      if (!(await this.watchVideo())) {
+        this.renderSummary();
+        return;
+      }
+    }
+    useAd(this.save.meta, 'redo', this.today());
+    this.weakOrders.splice(this.weakOrders.indexOf(best.w), 1);
+    const e = best.extra;
+    this.p.coins += e.total;
+    this.p.gems += e.gems;
+    run.summary.base += e.paid;
+    run.summary.tips += e.tip;
+    run.summary.earned += e.total;
+    run.summary.gems += e.gems;
+    run.summary.perfect += 1;
+    this.save.stats.perfect += 1;
+    this.persist();
+    this.sfx('happy');
+    this.toast(t('redoDone'), icon.star(), this.chips({ coins: e.total, gems: e.gems }));
+    this.renderSummary();
+  }
+
+  /** Midgame ads only at the transition to the next day (never on a navigation button). */
+  private async goNextDay(): Promise<void> {
     const completed = this.p.day - 1;
     this.o.root.querySelectorAll<HTMLButtonElement>('.menu button').forEach((b) => (b.disabled = true));
-    if (!this.challenge && midgameAllowed(completed, this.throttle)) {
+    if (midgameAllowed(completed, this.throttle)) {
       this.gameplay.stop();
       await this.o.platform.midgame();
       this.throttle.markShown();
     }
+    this.leaveSummary(() => void this.startDay());
+  }
+
+  private leaveSummary(next: () => void): void {
     this.challenge = false;
     this.challengeResult = null;
     next();
@@ -1380,6 +1421,7 @@ export class App {
           ${tabs.map((k) => `<button role="tab" class="tab ${k === this.shopTab ? 'on' : ''}" aria-selected="${k === this.shopTab}" data-tab="${k}">${tabIcon[k]}<span>${esc(t(k))}</span></button>`).join('')}
         </div>
         ${this.shopTab === 'decor' || this.shopTab === 'cafe' ? `<div class="decor-preview">${cafeBackground(this.features())}<div class="counter-wrap">${counter(this.p.decor)}</div></div>` : ''}
+        ${this.adNote()}
         <div class="cards">${this.shopCards()}</div>
       </div>`;
     $('#back', this.o.root)?.addEventListener('click', () => {
@@ -1432,7 +1474,7 @@ export class App {
           else {
             const gems = recipeGemCost(r.id);
             action = `<span class="badge-locked">${icon.lock()}<span>${esc(t('level', { n: r.level }))}</span></span>` + this.priceButton('recipe', r.id, gems, p.gems >= gems, 'gem');
-            if (r.id === next && canAd) action += `<button class="buy reward" data-buy="recipe-ad" data-id="${r.id}">${icon.video()}<span>${esc(t('unlockNow'))}</span></button>`;
+            if (r.id === next && canAd && this.videosOk()) action += `<button class="buy video" data-buy="recipe-ad" data-id="${r.id}">${icon.video()}<span>${esc(t('unlockNow'))}</span></button>`;
           }
           return `<div class="card ${st}" data-recipe="${r.id}"><div class="card-pic">${recipeIcon(r.steps)}</div><div class="card-name">${esc(name('recipes', r.id))}</div><div class="card-action">${action}</div></div>`;
         })
@@ -1471,7 +1513,7 @@ export class App {
         const at = meta.built[e.id] ?? now;
         const gems = skipCost(meta, e.id, now);
         action = `<span class="build-timer">${icon.timer()}<span data-left="${at}">${fmtTime(at - now)}</span></span>
-          <button class="buy reward" data-buy="finish-ad" data-id="${e.id}">${icon.video()}<span>${esc(t('finishNow'))}</span></button>
+          ${this.videosOk() ? `<button class="buy video" data-buy="finish-ad" data-id="${e.id}">${icon.video()}<span>${esc(t('finishNow'))}</span></button>` : ''}
           ${this.priceButton('finish-gems', e.id, gems, p.gems >= gems, 'gem')}`;
       } else if (st === 'locked') {
         action =
@@ -1501,14 +1543,14 @@ export class App {
       }
     } else if (kind === 'recipe-ad') {
       b.disabled = true;
-      if (await this.o.platform.rewarded()) {
+      if (await this.watchVideo()) {
         useAd(meta, 'unlock', this.today());
         ok = grantRecipe(p, id);
         if (ok) {
           this.preferNext = id;
           this.celebrateRecipe(id);
         }
-      } else this.toast(t('adUnavailable'));
+      }
     } else if (kind === 'machine') {
       ok = isMachine(id) && buyEquipment(p, id);
     } else if (kind === 'decor') {
@@ -1517,8 +1559,7 @@ export class App {
       ok = startBuild(meta, p, id, now);
     } else if (kind === 'finish-ad') {
       b.disabled = true;
-      if (await this.o.platform.rewarded()) ok = finishBuild(meta, p, id, Date.now(), false);
-      else this.toast(t('adUnavailable'));
+      if (await this.watchVideo()) ok = finishBuild(meta, p, id, Date.now(), false);
     } else if (kind === 'finish-gems') {
       ok = finishBuild(meta, p, id, now, true);
     }

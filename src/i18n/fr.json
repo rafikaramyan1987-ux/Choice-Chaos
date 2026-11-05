@@ -79,7 +79,7 @@
     "vip": "Client VIP !",
     "critic": "Critique culinaire !",
     "celebrity": "Célébrité !",
-    "redo3": "Passer à 3★",
+    "redo3": "Passer une commande à 3★",
     "cafe": "Café",
     "building": "Travaux…",
     "isReady": "{name} est prêt !",
@@ -94,7 +94,12 @@
     "noGems": "Pas assez de gemmes",
     "noCoins": "Pas assez de pièces",
     "dailyLimit": "Reviens demain",
-    "unlockNow": "Débloquer"
+    "unlockNow": "Débloquer",
+    "adblockNote": "Les vidéos sont bloquées par ton bloqueur de pub — tout le reste fonctionne.",
+    "videosOff": "Les vidéos ne sont pas disponibles pour l'instant.",
+    "watchVideo": "Regarder une vidéo",
+    "vipInfo": "Le premier client de ta prochaine journée sera un VIP aux gros pourboires.",
+    "redoDone": "Commande passée à 3★ !"
   },
   "recipes": {
     "coffee": "Petit café",

@@ -2,12 +2,24 @@
  * localStorage wrapper. Every access is wrapped in try/catch: storage can be
  * disabled (private mode, iframe sandbox, quota). Falls back to memory.
  */
+import type { StorageLike } from './ads';
+
 const memory = new Map<string, string>();
+let backend: StorageLike | null = null;
+
+/** Use the platform storage (CrazyGames data module) instead of localStorage. */
+export function setStorageBackend(s: StorageLike | null): void {
+  backend = s;
+}
+
+function store(): StorageLike {
+  return backend ?? window.localStorage;
+}
 
 export function readJSON<T>(key: string, fallback: T): T {
   let raw: string | null;
   try {
-    raw = window.localStorage.getItem(key);
+    raw = store().getItem(key);
   } catch {
     raw = null;
   }
@@ -24,7 +36,7 @@ export function writeJSON(key: string, value: unknown): void {
   const raw = JSON.stringify(value);
   memory.set(key, raw);
   try {
-    window.localStorage.setItem(key, raw);
+    store().setItem(key, raw);
   } catch {
     /* storage unavailable: memory copy is kept for this session */
   }
@@ -33,7 +45,7 @@ export function writeJSON(key: string, value: unknown): void {
 export function removeKey(key: string): void {
   memory.delete(key);
   try {
-    window.localStorage.removeItem(key);
+    store().removeItem(key);
   } catch {
     /* ignore */
   }

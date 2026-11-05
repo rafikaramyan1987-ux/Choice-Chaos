@@ -1,8 +1,8 @@
-import type { AdHooks, Platform } from './ads';
+import type { AdHooks, AdsUnavailable, Platform, StorageLike } from './ads';
 
 /**
  * CrazyGames HTML5 SDK v3 adapter.
- * Docs: https://docs.crazygames.com/sdk/html5-v3/intro/
+ * Docs: https://docs.crazygames.com/sdk/intro/ (game, video-ads, data, user modules)
  * The SDK script (https://sdk.crazygames.com/crazygames-sdk-v3.js) is only
  * injected into index.html for the `crazygames` build mode (see vite.config.ts).
  */
@@ -20,10 +20,21 @@ interface CGSDK {
     gameplayStart(): void;
     gameplayStop(): void;
     happytime?(): void;
+    settings?: { muteAudio?: boolean; disableChat?: boolean };
+    addSettingsChangeListener?(cb: (s: { muteAudio?: boolean }) => void): void;
   };
   ad: {
     requestAd(type: 'midgame' | 'rewarded', callbacks: CGAdCallbacks): void;
+    hasAdblock?(): Promise<boolean>;
   };
+  data?: StorageLike;
+  user?: { systemInfo?: { locale?: string } };
+}
+
+/** adError gives an error code: adsDisabled, unfilled, adblock, adCooldown, other. */
+export function adErrorCode(error: unknown): string {
+  if (error && typeof error === 'object' && 'code' in error) return String((error as { code: unknown }).code);
+  return String(error ?? '');
 }
 declare global {
   interface Window {
@@ -34,6 +45,10 @@ declare global {
 export class CrazyGamesPlatform implements Platform {
   readonly name = 'crazygames';
   private sdk: CGSDK | null = null;
+  private adblock = false;
+  private adsDisabled = false;
+  private muted = false;
+  private muteListeners: Array<(m: boolean) => void> = [];
   constructor(private readonly hooks: AdHooks) {}
 
   async init(): Promise<void> {
@@ -43,9 +58,41 @@ export class CrazyGamesPlatform implements Platform {
       await sdk.init();
       if (sdk.environment === 'disabled') return;
       this.sdk = sdk;
+      this.muted = sdk.game.settings?.muteAudio === true;
+      sdk.game.addSettingsChangeListener?.((st) => {
+        this.muted = st.muteAudio === true;
+        for (const cb of this.muteListeners) cb(this.muted);
+      });
+      void sdk.ad
+        .hasAdblock?.()
+        .then((v) => (this.adblock = v === true))
+        .catch(() => undefined);
     } catch (err) {
       console.warn('[CrazyGames] init failed', err);
     }
+  }
+
+  locale(): string | null {
+    return this.sdk?.user?.systemInfo?.locale ?? null;
+  }
+
+  adsUnavailable(): AdsUnavailable {
+    if (!this.sdk) return null;
+    if (this.adsDisabled) return 'disabled';
+    return this.adblock ? 'adblock' : null;
+  }
+
+  /** Progress is saved with the data module (synced to the CrazyGames account). */
+  storage(): StorageLike | null {
+    return this.sdk?.data ?? null;
+  }
+
+  platformMuted(): boolean {
+    return this.muted;
+  }
+
+  onPlatformMuteChange(cb: (muted: boolean) => void): void {
+    this.muteListeners.push(cb);
   }
 
   private safe(fn: (sdk: CGSDK) => void): void {
@@ -83,7 +130,10 @@ export class CrazyGamesPlatform implements Platform {
           },
           adFinished: () => end(true),
           adError: (error) => {
-            console.info('[CrazyGames] ad error', error);
+            const code = adErrorCode(error);
+            if (code === 'adblock') this.adblock = true;
+            if (code === 'adsDisabled') this.adsDisabled = true;
+            console.info('[CrazyGames] ad error', code);
             end(false);
           },
         });

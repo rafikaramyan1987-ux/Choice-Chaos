@@ -33,14 +33,15 @@ async function finishDayQuickly(page: Page): Promise<void> {
       await page.waitForTimeout(150);
       continue;
     }
-    const id = (await step.getAttribute('data-step')) ?? '';
-    const action = await step.getAttribute('data-action');
+    // the step can disappear right after count() (item finished): read it without waiting
+    const id = await step.getAttribute('data-step', { timeout: 300 }).catch(() => null);
+    const action = await step.getAttribute('data-action', { timeout: 300 }).catch(() => null);
     const btn = page.locator(`.ing[data-ing="${id}"]:not([disabled])`);
-    if (!(await btn.count())) {
+    if (!id || !(await btn.count())) {
       await page.waitForTimeout(120);
       continue;
     }
-    await btn.click();
+    await btn.click({ timeout: 2000 }).catch(() => undefined);
     if (action === 'timing') await page.locator('#work').click({ force: true });
     await page.waitForTimeout(120);
   }

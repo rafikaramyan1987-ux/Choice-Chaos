@@ -1,4 +1,7 @@
 :root {
+  /* 1% of the (virtual) screen height; set by src/ui/fit.ts when the landscape layout is scaled */
+  --vh: 1dvh;
+  --zoom: 1;
   --ink: #5a3a2c;
   --cream: #fff8ee;
   --bg: #ffe8cc;
@@ -233,8 +236,10 @@ svg { display: block; width: 100%; height: 100%; }
 .btn svg { width: 26px; height: 26px; flex: none; }
 .btn.primary { background: var(--btn); color: #fff; box-shadow: 0 5px 0 var(--btn-dark); }
 .btn.big { min-height: 64px; font-size: 1.25rem; }
-.btn.reward { background: #7fc8a9; color: #fff; box-shadow: 0 5px 0 #4f9a7b; }
-.btn.reward b { background: #fff; color: #4f9a7b; border-radius: 10px; padding: 0 8px; }
+.btn b { background: #ffe8cc; border-radius: 10px; padding: 0 8px; }
+.ad-note { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 0; font-size: .8rem; font-weight: 700; opacity: .75; text-align: center; }
+.ad-note svg { width: 18px; height: 18px; flex: none; }
+.subtle-btn { min-height: 44px; box-shadow: none; background: transparent; font-size: .95rem; }
 .btn.danger { background: var(--rose); color: #fff; box-shadow: 0 5px 0 #c96565; }
 .btn:disabled { opacity: .6; }
 .chip {
@@ -294,7 +299,6 @@ svg { display: block; width: 100%; height: 100%; }
 }
 .buy svg { width: 22px; height: 22px; }
 .buy.short { background: #e8d6c4; color: #8a6a55; box-shadow: 0 4px 0 #c9b39d; }
-.buy.reward { background: #7fc8a9; box-shadow: 0 4px 0 #4f9a7b; font-size: .85rem; }
 
 .badge-owned { width: 36px; height: 36px; border-radius: 50%; background: var(--mint); color: #fff; padding: 6px; display: grid; place-items: center; font-weight: 900; font-size: .8rem; }
 .badge-owned:not(:has(svg)) { width: auto; padding: 6px 14px; border-radius: 999px; }
@@ -378,7 +382,7 @@ svg { display: block; width: 100%; height: 100%; }
 .tile span { overflow-wrap: anywhere; }
 .tile.ready { border-color: var(--gold); background: #fff3c4; animation: serve-glow 1.6s ease-in-out infinite; }
 .tile.done, .tile.off { opacity: .6; }
-.ad-badge { position: absolute; right: 2px; top: 2px; width: 18px; height: 18px; color: #4f9a7b; }
+.ad-badge { position: absolute; right: 2px; top: 2px; width: 18px; height: 18px; color: #5a3a2c; }
 .missions { background: var(--cream); border-radius: var(--radius); border: 4px solid #e9b98c; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
 .missions h3 { margin: 0; display: flex; align-items: center; gap: 6px; font-size: 1rem; }
 .missions h3 svg { width: 24px; height: 24px; }
@@ -419,7 +423,8 @@ svg { display: block; width: 100%; height: 100%; }
 .build-timer svg { width: 20px; height: 20px; }
 .buy small { display: inline-flex; align-items: center; gap: 2px; font-size: .75rem; opacity: .9; }
 .buy small svg { width: 14px; height: 14px; }
-.buy.gem { background: #5bb6d9; box-shadow: 0 4px 0 #3a8fb7; }
+/* the optional video and its gem alternative look the same (CrazyGames rewarded-ad rule) */
+.buy.gem, .buy.video { background: #5bb6d9; box-shadow: 0 4px 0 #3a8fb7; }
 .buy.gem.short { background: #e8d6c4; color: #8a6a55; box-shadow: 0 4px 0 #c9b39d; }
 
 /* book */
@@ -474,4 +479,79 @@ svg { display: block; width: 100%; height: 100%; }
   .scene { height: 160px; }
   .strip .step { width: 34px; height: 34px; }
   .ing { min-height: 52px; }
+}
+
+/* ---------- landscape (desktop iframes 16:9, tablets, phones held sideways) */
+@media (min-aspect-ratio: 5/4) {
+  .app {
+    max-width: 1100px;
+    min-height: calc(100 * var(--vh));
+    padding: env(safe-area-inset-top) max(12px, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 8px) max(12px, env(safe-area-inset-left));
+  }
+  .hud { min-height: 50px; padding-top: 6px; }
+  .pill, .icon-btn { height: 40px; }
+  .icon-btn { width: 40px; padding: 8px; }
+
+  /* play: café on the left, station on the right, everything on one screen */
+  .play-screen {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); grid-template-rows: auto minmax(0, 1fr);
+    column-gap: 12px; row-gap: 8px; height: calc(calc(100 * var(--vh)) - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 8px); min-height: 0;
+  }
+  .play-screen .hud { grid-column: 1 / -1; }
+  .play-screen .scene { height: auto; min-height: 0; }
+  .play-screen .station { min-height: 0; overflow: hidden; gap: 6px; }
+  .guest-wrap { width: auto; height: 62%; max-width: none; }
+  .work { height: clamp(90px, calc(24 * var(--vh)), 240px); }
+  .work-item { width: min(100%, 240px); }
+  .strip .step { width: clamp(30px, calc(7 * var(--vh)), 44px); height: clamp(30px, calc(7 * var(--vh)), 44px); }
+  .strip { min-height: 0; }
+  .ingredients { gap: 6px; }
+  .ing { aspect-ratio: auto; height: clamp(44px, calc(15 * var(--vh)), 92px); min-height: 0; max-height: none; box-shadow: 0 3px 0 #f0c9a0; }
+  .tray-item { width: clamp(30px, calc(7 * var(--vh)), 44px); height: clamp(30px, calc(7 * var(--vh)), 44px); }
+  .serve { height: clamp(46px, calc(12 * var(--vh)), 64px); }
+
+  /* café screen: scene + play button left, daily tiles + missions right */
+  .hub-screen {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto;
+    column-gap: 12px; row-gap: 8px; align-content: start;
+  }
+  .hub-screen .hud { grid-column: 1 / -1; }
+  .hub-screen .title-scene { grid-column: 1; grid-row: 2 / span 2; height: auto; min-height: 220px; }
+  .hub-screen #play { grid-column: 1; grid-row: 4; }
+  .hub-screen .tiles { grid-column: 2; grid-row: 2; }
+  .hub-screen .missions { grid-column: 2; grid-row: 3; }
+  .hub-screen .settings { grid-column: 2; grid-row: 4; margin-top: 0; padding-top: 0; }
+  .tile { min-height: 62px; }
+  .hub-screen .settings { flex-wrap: nowrap; gap: 6px; align-self: center; }
+  .hub-screen .chip { min-height: 38px; padding: 4px 10px; font-size: .85rem; }
+  .hub-screen .chip.subtle { font-size: .75rem; }
+
+  /* summary: results left, missions & buttons right */
+  .summary-screen { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 12px; row-gap: 8px; align-content: start; }
+  .summary-screen .hud { grid-column: 1 / -1; }
+  .summary-screen .summary-card { grid-column: 1; grid-row: 2 / span 2; padding: 10px 14px; }
+  .summary-screen .missions { grid-column: 2; grid-row: 2; }
+  .summary-screen .menu { grid-column: 2; grid-row: 3; }
+  .summary-card h2 { margin: 4px 0; }
+  .sunset { width: 52px; height: 52px; }
+  .stats li { padding: 4px 10px; }
+
+  /* shop & book: more cards per row */
+  .cards { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+  .stickers { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+  .decor-preview { height: 120px; }
+  .modal-card { max-width: 420px; }
+}
+
+/* very short landscape screens (phones sideways, 800x450 iframes) */
+@media (min-aspect-ratio: 5/4) and (max-height: 520px) {
+  .btn { min-height: 46px; }
+  .btn.big { min-height: 50px; font-size: 1.1rem; }
+  .missions { gap: 4px; padding: 6px 8px; }
+  .mission { padding: 4px 6px; }
+  .m-pic { width: 32px; height: 32px; }
+  .tile { min-height: 54px; }
+  .tile svg { width: 26px; height: 26px; }
+  .calendar .cal { padding: 2px; }
+  .chest { width: 64px; height: 64px; }
 }

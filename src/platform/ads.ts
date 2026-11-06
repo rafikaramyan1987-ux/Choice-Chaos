@@ -14,7 +14,7 @@ export interface Platform {
   midgame(): Promise<void>;
   /** Shows a rewarded ad; resolves true if the reward must be granted. */
   rewarded(): Promise<boolean>;
-  /** Celebration moment (e.g. a new recipe unlocked). */
+  /** Celebration moment (a boss beaten). */
   happytime(): void;
   /** Player locale from the platform (e.g. "fr-FR"), or null. */
   locale(): string | null;
@@ -71,16 +71,16 @@ export class NoopPlatform implements Platform {
   onPlatformMuteChange(): void {}
 }
 
-export const MIDGAME_INTERVAL_MS = 3 * 60 * 1000;
+export const MIDGAME_INTERVAL_MS = 2 * 60 * 1000;
 
-/** Enforces "at most one midgame ad every 3 minutes". */
+/** Enforces "at most one midgame ad every 2 minutes" (CrazyGames also enforces its own cooldown). */
 export class MidgameThrottle {
   private last: number;
   constructor(
     private readonly now: () => number = () => Date.now(),
     private readonly interval = MIDGAME_INTERVAL_MS,
   ) {
-    // Count from session start so the first days never start with an ad.
+    // Count from session start so the very first levels never start with an ad.
     this.last = now();
   }
   canShow(): boolean {
@@ -110,9 +110,3 @@ export class GameplayTracker {
   }
 }
 
-/** Midgame ads are only shown between days, never before day 3 is completed. */
-export const MIDGAME_FIRST_DAY = 3;
-
-export function midgameAllowed(completedDay: number, throttle: MidgameThrottle): boolean {
-  return completedDay >= MIDGAME_FIRST_DAY && throttle.canShow();
-}

@@ -1,4 +1,5 @@
 import { defineConfig, type Plugin } from 'vitest/config';
+import { viteSingleFile } from 'vite-plugin-singlefile';
 
 const CRAZYGAMES_SDK = 'https://sdk.crazygames.com/crazygames-sdk-v3.js';
 
@@ -16,16 +17,14 @@ function crazyGamesSdk(mode: string): Plugin {
   };
 }
 
-// base './' keeps every asset path relative, so the same build works on
-// GitHub Pages (/Choice-Chaos/) and inside the CrazyGames iframe.
+// Everything (code, CSS, fonts) is inlined into a single dist/index.html.
 export default defineConfig(({ mode }) => ({
   base: './',
-  plugins: [crazyGamesSdk(mode)],
+  plugins: [crazyGamesSdk(mode), viteSingleFile()],
   build: {
     target: 'es2020',
-    assetsInlineLimit: 4096,
     reportCompressedSize: true,
-    chunkSizeWarningLimit: 1500,
+    chunkSizeWarningLimit: 4000,
   },
   test: {
     include: ['tests/unit/**/*.test.ts'],

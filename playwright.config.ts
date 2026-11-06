@@ -6,12 +6,12 @@ const executablePath = process.env.PW_CHROMIUM_PATH;
 
 export default defineConfig({
   testDir: 'tests/e2e',
-  timeout: 120_000,
+  timeout: 60_000,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   use: {
     baseURL: 'http://localhost:4173',
-    trace: 'retain-on-failure',
+    trace: 'off',
     launchOptions: executablePath ? { executablePath } : {},
   },
   webServer: {
@@ -21,9 +21,7 @@ export default defineConfig({
     timeout: 60_000,
   },
   projects: [
-    {
-      name: 'mobile-390',
-      use: { ...devices['Desktop Chrome'], viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: false },
-    },
+    { name: 'desktop', use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 720 } } },
+    { name: 'phone-portrait', use: { ...devices['Desktop Chrome'], viewport: { width: 390, height: 844 }, hasTouch: true } },
   ],
 });

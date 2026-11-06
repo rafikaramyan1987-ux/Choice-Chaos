@@ -1,1642 +1,1284 @@
+import { World } from 'planck';
+import { audio } from '../audio/sfx';
+import { coinsFor, starsFor } from '../core/damage';
+import { clamp, len } from '../core/math';
+import { Rng } from '../core/rng';
+import { pullToAim } from '../core/trajectory';
+import { PLAYER_WEAPONS, WEAPONS, type WeaponId } from '../core/weapons';
+import { Duel, Fighter, type DuelEvent, type FighterSetup, type Mode, type Side } from '../game/duel';
+import { generateLevel, type LevelDef } from '../game/levels';
 import {
-  DayRun,
-  OK_MARGIN,
-  buyDecor,
-  buyEquipment,
-  buyRecipeWithGems,
-  checkStep,
-  equipmentCost,
-  grantRecipe,
-  isMachine,
-  machineNeeded,
-  judge,
-  machineOf,
-  recipeStatus,
-  zoneWidth,
-  type Order,
-  type Payment,
-  type PayMods,
-  type Quality,
-} from '../core/game';
-import {
-  ACHIEVEMENTS,
-  CHALLENGE_GUESTS,
-  CHALLENGE_STARS,
-  EXPANSIONS,
-  LOGIN_REWARDS,
-  REROLL_GEMS,
-  STICKERS,
-  CUSTOMER_LEVEL,
-  cafeEffects,
-  canUseAd,
-  challengeAvailable,
-  challengeSeed,
-  claimDayChest,
-  claimGift,
-  claimLogin,
-  dayChest,
-  expansionStatus,
-  fillMissions,
-  finishBuild,
-  finishChallenge,
-  giftReady,
-  guestOptions,
-  localDate,
-  loginAvailable,
-  loginDayIndex,
-  nextLockedRecipe,
-  onServed,
-  rerollMission,
-  settleBuilds,
-  skipCost,
-  startBuild,
-  startDayMeta,
-  useAd,
-  xpToNext,
-  type Mission,
-  type Reward,
-  type RewardEvent,
-  type Unlock,
-} from '../core/meta';
-import { DECOR, INGREDIENTS, MACHINES, MAX_EQUIPMENT_LEVEL, RECIPES, actionOf, getRecipe, machineDuration, recipeGemCost, stationIngredients } from '../core/recipes';
-import { mulberry32, randomSeed, type Rng } from '../core/rng';
-import { GameplayTracker, MidgameThrottle, midgameAllowed, type Platform } from '../platform/ads';
-import { vibrate, type Sound } from '../platform/audio';
-import { loadSave, persist, resetProgress, type SaveData } from '../platform/save';
-import { LOCALES, detectLanguage, name, setLanguage, t } from '../i18n';
-import {
-  cafeBackground,
-  counter,
-  customer,
-  decorIcon,
-  drawItem,
-  expansionIcon,
-  icon,
-  ingredientIcon,
-  machineIcon,
-  recipeIcon,
-  type GuestKind,
-  type GuestSpecial,
-  type Mood,
-} from './art';
-import { $, esc, prefersReducedMotion, Stopwatch, wait } from './dom';
-import { appZoom } from './fit';
+  buy,
+  COLOR_PRICE,
+  COLORS,
+  equip,
+  furthestWorld,
+  HAT_PRICE,
+  HATS,
+  itemLocked,
+  levelUnlocked,
+  owns,
+  priceOf,
+  recordLevel,
+  starsOf,
+  worldStars,
+  worldUnlocked,
+  type ColorId,
+  type HatId,
+  type SaveData,
+  type ShopItem,
+} from '../game/progress';
+import { Ragdoll } from '../game/ragdoll';
+import { writeSave } from '../game/save';
+import { LEVELS_PER_WORLD, WORLDS, worldByIndex } from '../game/worlds';
+import { getLang, setLang, t, detectLang, type Key } from '../i18n';
+import { GameplayTracker, MidgameThrottle, type Platform } from '../platform/ads';
+import { drawFighter } from '../render/fighter';
+import { weaponIcon } from '../render/items';
+import { SceneRenderer, type View } from '../render/scene';
+import { clear, h } from './dom';
 
-export interface AppOptions {
-  root: HTMLElement;
-  platform: Platform;
-  sound: Sound;
-  seed?: number;
-}
-
-type ShopTab = 'recipes' | 'equipment' | 'decor' | 'cafe';
-
-/** Gem alternatives to rewarded videos (CrazyGames: always offer another way to get the reward). */
-const VIP_GEMS = 3;
-const REDO_GEMS = 2;
-type BookTab = 'stickers' | 'achievements';
-
-interface ActiveAction {
-  id: string;
-  kind: 'pour' | 'topping' | 'timing';
-  /** pointerId holding the button; -1 keyboard, -2 timing, -3 quick tap. */
-  pointer: number;
-  start: number;
+interface Session {
+  mode: Mode;
+  world: number;
   level: number;
-  target: number;
-  width: number;
-  /** Machine warm-up before the bar reaches the green zone. */
-  warm: number;
-  raf: number;
-  stopSound: (() => void) | null;
+  L: LevelDef;
+  tryWeapon: WeaponId | null;
+  revived: boolean;
+  wave: number;
+  endlessHp: number;
+  attract: boolean;
 }
 
-/** Full gauge time when holding (ms). */
-export const POUR_MS = 2600;
-export const TOPPING_MS = 2200;
-/** Time the timing bar needs to cross the green zone, whatever the machine level. */
-export const ZONE_CROSS_MS = 1400;
-
-/** Gauge level (0..1) after `t` ms of an action. */
-export function actionLevel(kind: 'pour' | 'topping' | 'timing', t: number, target: number, width: number, warm: number, slow = false): number {
-  const k = slow ? 1.25 : 1;
-  if (kind === 'pour') return Math.min(1, t / (POUR_MS * k));
-  if (kind === 'topping') return Math.min(1, t / (TOPPING_MS * k));
-  const lo = Math.max(0.05, target - width / 2);
-  if (t < warm) return (lo * t) / warm;
-  return Math.min(1, lo + ((t - warm) / (ZONE_CROSS_MS * k)) * width);
-}
-
-function hintKind(id: string): 'tap' | 'hold' | 'timing' {
-  const a = actionOf(id);
-  return a === 'tap' ? 'tap' : a === 'timing' ? 'timing' : 'hold';
-}
-
-
-const fmtTime = (ms: number) => {
-  const s = Math.max(0, Math.ceil(ms / 1000));
-  return s >= 3600 ? `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-};
+const MAX_DPR = 2;
 
 export class App {
-  private save: SaveData;
-  private readonly gameplay: GameplayTracker;
-  private readonly throttle = new MidgameThrottle();
-  private readonly watch = new Stopwatch();
-  private readonly reduced = prefersReducedMotion();
-  private seed: number;
-  private readonly rng: Rng;
-  private run: DayRun | null = null;
-  private busy = false;
-  private hintTimer = 0;
-  private ticker = 0;
-  private lastSummaryDoubled = false;
-  private dayChestEvents: RewardEvent[] = [];
-  private shopTab: ShopTab = 'recipes';
-  private bookTab: BookTab = 'stickers';
-  private shopReturn: () => void = () => this.renderHub();
-  private suppressClick = false;
-  private action: ActiveAction | null = null;
-  /** A fancy recipe just unlocked: the first guest of the next day asks for it. */
-  private preferNext: string | null = null;
-  /** "Call a VIP" reward: the first guest of the next day is a VIP. */
-  private vipNext = false;
-  /** Playing the daily challenge instead of a normal day. */
-  private challenge = false;
-  private challengeResult: RewardEvent[] | null = null;
-  /** Orders of the current day below 3★ (the summary offers to upgrade one). */
-  private weakOrders: Array<{ items: Order['items']; special: Order['special']; pay: Payment; mods: PayMods }> = [];
+  private canvas: HTMLCanvasElement;
+  private ctx: CanvasRenderingContext2D;
+  private layer: HTMLElement;
+  private hud: HTMLElement;
+  private banner: HTMLElement;
+  private view: View = { w: 1, h: 1, dpr: 1, padTop: 0, padBottom: 0 };
+  private duel: Duel | null = null;
+  private scene: SceneRenderer | null = null;
+  private session: Session | null = null;
+  private tracker: GameplayTracker;
+  private throttle = new MidgameThrottle();
+  private paused = false;
+  private adPlaying = false;
+  private last = performance.now();
+  private drag: { id: number; x0: number; y0: number; x: number; y: number } | null = null;
+  private icons = new Map<string, string>();
+  private overTimer = 0;
+  private hudRefs: Record<string, HTMLElement> = {};
+  private mapWorld = 1;
+  private versusWorld = 1;
+  /** Shown result screen awaiting input. */
+  private resultShown = false;
+  /** Simulation speed multiplier (automation only). */
+  speed = 1;
+  /** Stops the simulation but keeps rendering (cover renders). */
+  freeze = false;
 
-  constructor(private readonly o: AppOptions) {
-    this.save = loadSave();
-    this.gameplay = new GameplayTracker(o.platform);
-    this.seed = o.seed ?? randomSeed();
-    this.rng = mulberry32(this.seed ^ 0x51ed);
-    // language: saved choice, else the platform locale (CrazyGames system info), else the browser
-    const platformLocale = o.platform.locale();
-    const lang =
-      this.save.settings.lang ??
-      detectLanguage(platformLocale ? [platformLocale] : typeof navigator !== 'undefined' ? navigator.languages : undefined);
-    setLanguage(lang);
-    this.applyMute();
-    // the platform's muteAudio setting wins over the in-game toggle
-    o.platform.onPlatformMuteChange(() => this.applyMute());
-    fillMissions(this.save.meta, this.p, this.rng);
-    persist(this.save);
-    // first gesture unlocks audio
-    const unlock = () => o.sound.unlock();
-    o.root.addEventListener('pointerdown', unlock);
-    o.root.addEventListener('keydown', unlock);
-    // iOS suspends audio when the app is backgrounded; resume needs a real gesture (touchend / click)
-    document.addEventListener('touchend', unlock, { passive: true });
-    document.addEventListener('click', unlock);
+  constructor(
+    private readonly root: HTMLElement,
+    public save: SaveData,
+    private readonly platform: Platform,
+  ) {
+    this.tracker = new GameplayTracker(platform);
+    clear(root);
+    this.canvas = h<'canvas'>('canvas#game');
+    this.ctx = this.canvas.getContext('2d', { alpha: false }) as CanvasRenderingContext2D;
+    this.hud = h('div.hud.hidden');
+    this.layer = h('div.layer');
+    this.banner = h('div.banner');
+    root.append(this.canvas, this.hud, this.banner, this.layer);
+    this.applySettings();
+    this.mapWorld = clamp(save.lastWorld, 1, furthestWorld(save));
+    this.resize();
+    window.addEventListener('resize', () => this.resize());
+    this.bindInput();
+    this.buildIcons();
+    platform.onPlatformMuteChange(() => this.applyAudio());
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && this.isPlaying()) this.pause();
+    });
+    requestAnimationFrame((t0) => this.frame(t0));
+    // debug / automation hooks (used by the Playwright smoke test and recordings)
+    (window as unknown as { __stickDuel: unknown }).__stickDuel = this;
   }
 
-  /** New players land directly in gameplay; returning players see the café screen. */
-  start(): void {
-    const fresh = this.save.meta.stats.served === 0 && this.p.day === 1 && this.save.stats.customers === 0;
-    if (fresh) void this.startDay();
-    else this.renderHub();
+  // ───────────── setup ─────────────
+
+  private applySettings(): void {
+    const l = this.save.settings.lang;
+    setLang(l === 'auto' ? detectLang(this.platform.locale(), navigator.language) : l);
+    this.applyAudio();
   }
 
-  private applyMute(): void {
-    this.o.sound.setMuted(this.save.settings.muted || this.o.platform.platformMuted());
+  private applyAudio(): void {
+    audio.setSfxEnabled(this.save.settings.sound);
+    audio.setMusicEnabled(this.save.settings.music);
+    audio.setMuted(this.adPlaying || this.platform.platformMuted());
   }
 
-  // ------------------------------------------------------------------ rewarded videos
-
-  /** Rewarded videos can be offered (no ad blocker detected, ads not disabled for this session). */
-  private videosOk(): boolean {
-    return this.o.platform.adsUnavailable() === null;
+  onAdStart(): void {
+    this.adPlaying = true;
+    this.applyAudio();
   }
-
-  /** Notice shown instead of video buttons when an ad blocker is detected (the game stays fully playable). */
-  private adNote(): string {
-    return this.o.platform.adsUnavailable() === 'adblock' ? `<p class="ad-note">${icon.video()}<span>${esc(t('adblockNote'))}</span></p>` : '';
-  }
-
-  /** Plays a rewarded video. The reward is given only when it finished (never on adError). */
-  private async watchVideo(): Promise<boolean> {
-    const ok = await this.o.platform.rewarded();
-    if (!ok) {
-      const why = this.o.platform.adsUnavailable();
-      this.toast(why === 'adblock' ? t('adblockNote') : why === 'disabled' ? t('videosOff') : t('adUnavailable'), icon.video());
-    }
-    return ok;
-  }
-
-  // ------------------------------------------------------------------ helpers
-
-  private get p() {
-    return this.save.progress;
-  }
-
-  private today(): string {
-    return localDate();
-  }
-
-  /** Decorations + finished expansions, drawn in the café. */
-  private features(): string[] {
-    return [...this.p.decor, ...cafeEffects(this.save.meta, Date.now()).built];
-  }
-
-  private ms(n: number): number {
-    return this.reduced ? Math.min(n, 120) : n;
-  }
-
-  private sfx(kind: Parameters<Sound['play']>[0], seconds?: number): void {
-    this.o.sound.play(kind, seconds);
-  }
-
-  private buzz(pattern: number | number[]): void {
-    vibrate(this.save.settings.vibration, pattern);
+  onAdEnd(): void {
+    this.adPlaying = false;
+    this.applyAudio();
   }
 
   private persist(): void {
-    persist(this.save);
+    writeSave(this.save);
   }
 
-  /** Small non-blocking notice at the top (stacked). */
-  private toast(text: string, pic = '', extra = ''): void {
-    let stack = $('.toasts', this.o.root);
-    if (!stack) {
-      stack = document.createElement('div');
-      stack.className = 'toasts';
-      stack.setAttribute('role', 'status');
-      this.o.root.appendChild(stack);
-    }
-    const el = document.createElement('div');
-    el.className = 'toast';
-    el.innerHTML = `${pic ? `<span class="toast-pic">${pic}</span>` : ''}<span>${esc(text)}</span>${extra ? `<span class="reward-chips">${extra}</span>` : ''}`;
-    stack.appendChild(el);
-    setTimeout(() => el.remove(), 2800);
+  private buildIcons(): void {
+    const dpr = Math.min(MAX_DPR, window.devicePixelRatio || 1);
+    for (const w of Object.values(WEAPONS)) this.icons.set(w.id, weaponIcon(w.look, 56, dpr).toDataURL());
   }
 
-  private coinPill(): string {
-    return `<div class="pill coins" id="coins" aria-label="${esc(t('coins'))}">${icon.coin()}<span id="coin-count">${this.p.coins}</span></div>`;
+  private resize(): void {
+    const dpr = Math.min(MAX_DPR, window.devicePixelRatio || 1);
+    const w = Math.max(1, Math.round(window.innerWidth * dpr));
+    const hgt = Math.max(1, Math.round(window.innerHeight * dpr));
+    this.canvas.width = w;
+    this.canvas.height = hgt;
+    const portrait = hgt > w;
+    this.view = { w, h: hgt, dpr, padTop: (portrait ? 92 : 64) * dpr, padBottom: (portrait ? 96 : 70) * dpr };
+    this.root.classList.toggle('is-portrait', portrait);
   }
 
-  private gemPill(): string {
-    return `<div class="pill gems" id="gems" aria-label="${esc(t('gems'))}">${icon.gem()}<span id="gem-count">${this.p.gems}</span></div>`;
+  private isPlaying(): boolean {
+    return !!this.session && !this.session.attract && !!this.duel && this.duel.phase !== 'over' && this.duel.phase !== 'intro' && !this.paused;
   }
 
-  private updateWallet(): void {
-    const c = $('#coin-count', this.o.root);
-    if (c) c.textContent = String(this.p.coins);
-    const g = $('#gem-count', this.o.root);
-    if (g) g.textContent = String(this.p.gems);
-    const lv = $('#level', this.o.root);
-    if (lv) lv.outerHTML = this.levelPill();
-  }
+  // ───────────── main loop ─────────────
 
-  private levelPill(): string {
-    const m = this.save.meta;
-    const pct = Math.round((m.xp / xpToNext(m.level)) * 100);
-    return `<div class="pill level" id="level" aria-label="${esc(t('level', { n: m.level }))}"><span class="lv">${m.level}</span><span class="xp"><i style="width:${pct}%"></i></span></div>`;
-  }
-
-  private muteButton(): string {
-    const m = this.save.settings.muted;
-    return `<button class="icon-btn" id="mute" aria-label="${esc(t('sound'))}" aria-pressed="${!m}">${m ? icon.soundOff() : icon.soundOn()}</button>`;
-  }
-
-  private bindMute(): void {
-    $('#mute', this.o.root)?.addEventListener('click', () => {
-      this.save.settings.muted = !this.save.settings.muted;
-      this.applyMute();
-      this.persist();
-      const b = $('#mute', this.o.root);
-      if (b) {
-        b.innerHTML = this.save.settings.muted ? icon.soundOff() : icon.soundOn();
-        b.setAttribute('aria-pressed', String(!this.save.settings.muted));
+  private frame(now: number): void {
+    const dt = Math.min(0.05, (now - this.last) / 1000);
+    this.last = now;
+    if (this.duel && this.scene && !this.paused && !this.adPlaying && !this.freeze) {
+      for (let i = 0; i < this.speed; i++) {
+        const slow = this.duel.slowmo > 0 ? 0.35 : 1;
+        this.duel.update(dt * slow);
+        this.scene.update(dt * slow, this.view);
       }
-      this.sfx('tap');
+      if (this.session?.attract) this.attractTick();
+      else this.duelTick(dt);
+    }
+    if (this.scene) {
+      this.scene.draw(this.ctx, this.view);
+      this.drawDrag();
+    }
+    requestAnimationFrame((t0) => this.frame(t0));
+  }
+
+  private drawDrag(): void {
+    const d = this.drag;
+    if (!d || !this.duel?.humanAiming) return;
+    const c = this.ctx;
+    const k = this.view.dpr;
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.lineCap = 'round';
+    c.strokeStyle = 'rgba(255,255,255,0.75)';
+    c.lineWidth = 4 * k;
+    c.setLineDash([2 * k, 10 * k]);
+    c.beginPath();
+    c.moveTo(d.x0 * k, d.y0 * k);
+    c.lineTo(d.x * k, d.y * k);
+    c.stroke();
+    c.setLineDash([]);
+    c.fillStyle = 'rgba(255,255,255,0.35)';
+    c.strokeStyle = 'rgba(255,255,255,0.9)';
+    c.lineWidth = 3 * k;
+    c.beginPath();
+    c.arc(d.x0 * k, d.y0 * k, 14 * k, 0, Math.PI * 2);
+    c.fill();
+    c.stroke();
+    c.beginPath();
+    c.arc(d.x * k, d.y * k, 9 * k, 0, Math.PI * 2);
+    c.fillStyle = '#ffd23d';
+    c.fill();
+    c.stroke();
+  }
+
+  // ───────────── input ─────────────
+
+  private maxPull(): number {
+    return clamp(Math.min(window.innerWidth, window.innerHeight) * 0.32, 110, 260);
+  }
+
+  private bindInput(): void {
+    const cv = this.canvas;
+    cv.addEventListener('pointerdown', (e) => {
+      audio.unlock();
+      if (!this.duel?.humanAiming || this.paused || this.drag) return;
+      cv.setPointerCapture(e.pointerId);
+      this.drag = { id: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY };
     });
-  }
-
-  private chips(r: Reward): string {
-    return [
-      r.coins ? `<span class="chip-r">${icon.coin()}${r.coins}</span>` : '',
-      r.gems ? `<span class="chip-r">${icon.gem()}${r.gems}</span>` : '',
-      r.xp ? `<span class="chip-r xp">XP ${r.xp}</span>` : '',
-    ].join('');
-  }
-
-  /** Opens a modal and resolves with the data-a of the pressed button ('' when closed). */
-  private modal(inner: string, cls = ''): Promise<string> {
-    return new Promise((resolve) => {
-      const el = document.createElement('div');
-      el.className = `modal ${cls}`;
-      el.innerHTML = `<div class="modal-card" role="dialog" aria-modal="true">${inner}</div>`;
-      this.o.root.appendChild(el);
-      (el.querySelector('[data-a]') as HTMLElement | null)?.focus();
-      el.addEventListener('click', (e) => {
-        const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-a]');
-        if (!btn && e.target !== el) return;
-        if (btn?.disabled) return;
-        el.remove();
-        resolve(btn?.dataset.a ?? '');
-      });
-    });
-  }
-
-  private unlockPic(u: Unlock): string {
-    if (u.type === 'recipe') return recipeIcon(getRecipe(u.id).steps);
-    if (u.type === 'customer') return this.guestPic(u.id);
-    return expansionIcon(u.id);
-  }
-
-  private guestPic(id: string): string {
-    const special = ['vip', 'critic', 'celebrity'].includes(id) ? (id as GuestSpecial) : null;
-    return customer(7, 'happy', special ? 'bear' : (id as GuestKind), special);
-  }
-
-  /** Mission/achievement/sticker toasts; level-ups open a chest. */
-  private async showRewards(events: RewardEvent[]): Promise<void> {
-    for (const e of events) {
-      if (e.source === 'mission') {
-        this.sfx('perfect');
-        this.toast(t('missionDone'), icon.missions(), this.chips({ coins: e.reward.coins, gems: e.reward.gems }));
-      } else if (e.source === 'achievement') {
-        this.sfx('unlock');
-        this.toast(`${t('achievement')} ${name('achievements', e.id)}`, icon.trophy(), this.chips(e.reward));
-      } else if (e.source === 'sticker') {
-        this.toast(`${t('newSticker')} ${name('guests', e.id)}`, this.guestPic(e.id), this.chips(e.reward));
-      } else if (e.source === 'build') {
-        this.sfx('unlock');
-        this.toast(t('isReady', { name: name('expansions', e.id) }), icon.hammer());
-      }
-    }
-    this.updateWallet();
-    for (const e of events.filter((x) => x.source === 'level')) await this.levelUp(e);
-  }
-
-  private async levelUp(e: RewardEvent): Promise<void> {
-    this.o.platform.happytime();
-    this.sfx('day');
-    this.buzz([30, 50, 30]);
-    const unlocks = (e.unlocks ?? [])
-      .map((u) => {
-        const label = u.type === 'recipe' ? t('newRecipe') : u.type === 'customer' ? t('newGuest') : t('newArea');
-        const nm = u.type === 'recipe' ? name('recipes', u.id) : u.type === 'customer' ? name('guests', u.id) : name('expansions', u.id);
-        return `<div class="unlock-row"><div class="unlock-mini">${this.unlockPic(u)}</div><div><small>${esc(label)}</small><b>${esc(nm)}</b></div></div>`;
-      })
-      .join('');
-    await this.modal(
-      `<div class="chest">${icon.gift()}</div><h2>${esc(t('levelUp', { n: e.id }))}</h2><div class="reward-chips">${this.chips(e.reward)}</div>${unlocks}<button class="btn primary" data-a="ok">${icon.check()}<span>OK</span></button>`,
-      'level-modal',
-    );
-    this.updateWallet();
-  }
-
-  // ------------------------------------------------------------------ hub (café screen)
-
-  private renderHub(): void {
-    this.gameplay.stop();
-    clearInterval(this.ticker);
-    const meta = this.save.meta;
-    const today = this.today();
-    const events = settleBuilds(meta, this.p, Date.now());
-    fillMissions(meta, this.p, this.rng);
-    this.persist();
-    const giftOk = giftReady(meta, Date.now());
-    const chOk = challengeAvailable(meta, today);
-    const vipOk = meta.level >= CUSTOMER_LEVEL.vip && canUseAd(meta, 'vip', today) && !this.vipNext && (this.videosOk() || this.p.gems >= VIP_GEMS);
-    this.o.root.innerHTML = `
-      <div class="screen hub-screen">
-        <header class="hud">${this.levelPill()}${this.coinPill()}${this.gemPill()}${this.muteButton()}</header>
-        <section class="scene title-scene">
-          ${cafeBackground(this.features())}
-          <div class="guest-wrap wave">${customer(this.seed, 'happy')}</div>
-          <div class="counter-wrap">${counter(this.p.decor)}</div>
-          <div class="counter-items">${recipeIcon(getRecipe('latte').steps)}${recipeIcon(getRecipe('croissant').steps)}</div>
-          <div class="hub-logo"><span class="logo-cup">${icon.recipes()}</span><h1>${esc(t('title'))}</h1></div>
-        </section>
-        <button class="btn primary big" id="play">${icon.play()}<span>${esc(t('play'))}</span><small>${esc(t('day', { n: this.p.day }))}</small></button>
-        <div class="tiles">
-          <button class="tile ${giftOk ? 'ready' : ''}" id="gift">${icon.gift()}<span id="gift-label">${giftOk ? esc(t('giftReady')) : fmtTime(meta.giftAt - Date.now())}</span></button>
-          <button class="tile ${chOk ? 'ready' : 'done'}" id="challenge">${icon.calendar()}<span>${esc(chOk ? t('challenge') : t('challengeDoneToday'))}</span></button>
-          <button class="tile ad ${vipOk ? '' : 'off'}" id="vip" ${vipOk ? '' : 'disabled'}>${icon.crown()}<span>${esc(this.vipNext ? '✓' : t('callVip'))}</span>${vipOk && this.videosOk() ? `<i class="ad-badge">${icon.video()}</i>` : ''}</button>
-          <button class="tile" id="book">${icon.book()}<span>${esc(t('book'))}</span></button>
-          <button class="tile" id="shop">${icon.shop()}<span>${esc(t('shop'))}</span></button>
-        </div>
-        ${this.missionsCard()}
-        <div class="settings" role="group" aria-label="${esc(t('settings'))}">
-          <button class="chip" id="vib" aria-pressed="${this.save.settings.vibration}" aria-label="${esc(t('vibration'))}">${icon.vibrate()}<span>${this.save.settings.vibration ? 'ON' : 'OFF'}</span></button>
-          ${Object.entries(LOCALES)
-            .map(([code, l]) => `<button class="chip lang ${l.meta.code === document.documentElement.lang ? 'on' : ''}" data-lang="${code}">${esc(l.meta.name)}</button>`)
-            .join('')}
-          <button class="chip subtle" id="reset">${esc(t('reset'))}</button>
-        </div>
-      </div>`;
-    this.bindMute();
-    this.bindMissions(() => this.renderHub());
-    $('#play', this.o.root)?.addEventListener('click', () => {
-      this.sfx('tap');
-      this.challenge = false;
-      void this.startDay();
-    });
-    $('#shop', this.o.root)?.addEventListener('click', () => {
-      this.sfx('tap');
-      this.shopReturn = () => this.renderHub();
-      this.renderShop();
-    });
-    $('#book', this.o.root)?.addEventListener('click', () => {
-      this.sfx('tap');
-      this.renderBook();
-    });
-    $('#gift', this.o.root)?.addEventListener('click', () => void this.openGift());
-    $('#challenge', this.o.root)?.addEventListener('click', () => void this.openChallenge());
-    $('#vip', this.o.root)?.addEventListener('click', () => void this.callVip());
-    $('#vib', this.o.root)?.addEventListener('click', () => {
-      this.save.settings.vibration = !this.save.settings.vibration;
-      this.persist();
-      this.buzz(30);
-      this.renderHub();
-    });
-    this.o.root.querySelectorAll<HTMLElement>('[data-lang]').forEach((b) =>
-      b.addEventListener('click', () => {
-        const code = b.dataset.lang ?? 'en';
-        setLanguage(code);
-        this.save.settings.lang = code;
-        this.persist();
-        this.renderHub();
-      }),
-    );
-    $('#reset', this.o.root)?.addEventListener('click', () => void this.confirmReset());
-    // gift box countdown
-    this.ticker = window.setInterval(() => {
-      const label = $('#gift-label', this.o.root);
-      if (!label) return clearInterval(this.ticker);
-      const left = meta.giftAt - Date.now();
-      if (left <= 0) {
-        label.textContent = t('giftReady');
-        $('#gift', this.o.root)?.classList.add('ready');
-      } else label.textContent = fmtTime(left);
-    }, 1000);
-    void this.showRewards(events).then(() => {
-      if (loginAvailable(meta, today)) void this.openLogin();
-    });
-  }
-
-  private missionsCard(): string {
-    const ms = this.save.meta.missions;
-    return `<section class="missions" aria-label="${esc(t('missions'))}"><h3>${icon.missions()}<span>${esc(t('missions'))}</span></h3>${ms.map((m) => this.missionRow(m)).join('')}</section>`;
-  }
-
-  private missionRow(m: Mission): string {
-    const pct = Math.round((m.progress / m.target) * 100);
-    const text = t(`mission_${m.kind}`, { n: m.target, recipe: m.recipe ? name('recipes', m.recipe) : '' });
-    const pic = m.recipe ? recipeIcon(getRecipe(m.recipe).steps) : missionIcon(m.kind);
-    const reroll = this.p.gems >= REROLL_GEMS ? `<button class="reroll" data-reroll="${m.id}" aria-label="${esc(t('reroll'))}">${icon.redo()}</button>` : '';
-    return `<div class="mission" data-mission="${m.kind}"><div class="m-pic">${pic}</div><div class="m-body"><div class="m-text">${esc(text)}</div>
-      <div class="bar"><i style="width:${pct}%"></i><span>${m.progress}/${m.target}</span></div></div><div class="m-reward">${this.chips({ coins: m.reward.coins, gems: m.reward.gems })}</div>${reroll}</div>`;
-  }
-
-  private bindMissions(after: () => void): void {
-    this.o.root.querySelectorAll<HTMLButtonElement>('[data-reroll]').forEach((b) =>
-      b.addEventListener('click', () => {
-        if (rerollMission(this.save.meta, this.p, b.dataset.reroll ?? '', this.rng)) {
-          this.sfx('tap');
-          this.persist();
-          after();
-        }
-      }),
-    );
-  }
-
-  private async confirmReset(): Promise<void> {
-    const a = await this.modal(
-      `<p>${esc(t('resetConfirm'))}</p><div class="row"><button class="btn" data-a="no">${esc(t('no'))}</button><button class="btn danger" data-a="yes">${esc(t('yes'))}</button></div>`,
-    );
-    if (a === 'yes') {
-      this.save = resetProgress(this.save);
-      fillMissions(this.save.meta, this.p, this.rng);
-      this.persist();
-      this.renderHub();
-    }
-  }
-
-  // ------------------------------------------------------------------ daily rewards
-
-  private async openLogin(): Promise<void> {
-    const meta = this.save.meta;
-    const today = this.today();
-    if (!loginAvailable(meta, today)) return;
-    const day = loginDayIndex(meta, today);
-    const cells = LOGIN_REWARDS.map(
-      (r, i) =>
-        `<div class="cal ${i + 1 < day ? 'past' : i + 1 === day ? 'now' : ''} ${i === 6 ? 'big' : ''}"><small>${esc(t('loginDay', { n: i + 1 }))}</small><div class="reward-chips">${this.chips(r)}</div>${i + 1 < day ? `<span class="tick">${icon.check()}</span>` : ''}</div>`,
-    ).join('');
-    const a = await this.modal(
-      `<h2>${icon.calendar()}<span>${esc(t('dailyLogin'))}</span></h2><div class="calendar">${cells}</div>
-       ${this.claimRow()}`,
-      'login-modal',
-    );
-    let mult = 1;
-    if (a === 'x2' && (await this.watchVideo())) mult = 2;
-    const ev = claimLogin(meta, this.p, today, mult);
-    if (!ev) return;
-    this.sfx('coin');
-    this.toast(t('dailyLogin'), icon.calendar(), this.chips(ev.reward));
-    await this.showRewards(settleBuilds(meta, this.p, Date.now()));
-    this.persist();
-    this.updateWallet();
-  }
-
-  /** "Claim" and the optional "×2 with a video" look exactly the same (CrazyGames rewarded-ad rule). */
-  private claimRow(): string {
-    const x2 = this.videosOk() ? `<button class="btn" data-a="x2">${icon.video()}<span>×2</span></button>` : '';
-    return `<div class="row"><button class="btn" data-a="claim">${esc(t('claim'))}</button>${x2}</div>${this.adNote()}`;
-  }
-
-  private async openGift(): Promise<void> {
-    const meta = this.save.meta;
-    if (!giftReady(meta, Date.now())) {
-      this.toast(fmtTime(meta.giftAt - Date.now()), icon.timer());
-      return;
-    }
-    const a = await this.modal(
-      `<div class="chest">${icon.gift()}</div><h2>${esc(t('gift'))}</h2>
-       ${this.claimRow()}`,
-      'gift-modal',
-    );
-    let mult = 1;
-    if (a === 'x2' && (await this.watchVideo())) mult = 2;
-    const ev = claimGift(meta, this.p, Date.now(), this.rng, mult);
-    if (ev) {
-      this.sfx('coin');
-      this.buzz(20);
-      this.toast(t('gift'), icon.gift(), this.chips(ev.reward));
-    }
-    this.persist();
-    this.renderHub();
-  }
-
-  private async callVip(): Promise<void> {
-    const meta = this.save.meta;
-    if (!canUseAd(meta, 'vip', this.today())) {
-      this.toast(t('dailyLimit'));
-      return;
-    }
-    const video = this.videosOk() ? `<button class="btn" data-a="video">${icon.video()}<span>${esc(t('watchVideo'))}</span></button>` : '';
-    const gems = `<button class="btn" data-a="gems" ${this.p.gems >= VIP_GEMS ? '' : 'disabled'}>${icon.gem()}<span>${VIP_GEMS}</span></button>`;
-    const a = await this.modal(
-      `<div class="chest">${this.guestPic('vip')}</div><h2>${esc(t('callVip'))}</h2><p class="muted-note">${esc(t('vipInfo'))}</p>
-       <div class="row">${video}${gems}</div>${this.adNote()}<button class="btn subtle-btn" data-a="no">${esc(t('back'))}</button>`,
-    );
-    if (a === 'gems' && this.p.gems >= VIP_GEMS) this.p.gems -= VIP_GEMS;
-    else if (!(a === 'video' && (await this.watchVideo()))) return;
-    useAd(meta, 'vip', this.today());
-    this.vipNext = true;
-    this.persist();
-    this.toast(t('vipComing'), icon.crown());
-    this.renderHub();
-  }
-
-  private async openChallenge(): Promise<void> {
-    const done = !challengeAvailable(this.save.meta, this.today());
-    const a = await this.modal(
-      `<h2>${icon.calendar()}<span>${esc(t('challenge'))}</span></h2>
-       <p class="goal">${icon.star()}<span>${esc(t('challengeGoal', { n: CHALLENGE_STARS }))}</span> · ${icon.guest()}<span>${CHALLENGE_GUESTS}</span></p>
-       <div class="reward-chips">${done ? esc(t('challengeDoneToday')) : this.chips({ coins: 120, gems: 4, xp: 40 })}</div>
-       <div class="row"><button class="btn" data-a="no">${esc(t('back'))}</button><button class="btn primary" data-a="go">${icon.play()}</button></div>`,
-    );
-    if (a !== 'go') return;
-    this.challenge = true;
-    void this.startDay();
-  }
-
-  private renderPlay(): void {
-    const run = this.run;
-    if (!run) return;
-    this.o.root.innerHTML = `
-      <div class="screen play-screen">
-        <header class="hud">
-          ${this.challenge ? `<div class="pill" id="challenge-pill">${icon.star()}<span id="challenge-stars">0/${CHALLENGE_STARS}</span></div>` : `<div class="pill">${icon.sun()}<span>${esc(t('day', { n: run.day }))}</span></div>`}
-          <div class="dots" id="dots" aria-hidden="true"></div>
-          ${this.coinPill()}
-          ${this.muteButton()}
-        </header>
-        <section class="scene" id="scene" style="--progress:0">
-          ${cafeBackground(this.features())}
-          <div class="guest-wrap" id="guest"></div>
-          <div class="helper-badge hidden" id="helper">${icon.hammer()}</div>
-          <div class="bubble hidden" id="bubble" aria-label="${esc(t('order'))}"></div>
-          <div class="counter-wrap">${counter(this.p.decor)}</div>
-          <div class="fx" id="fx"></div>
-        </section>
-        <section class="station" id="station">
-          <div class="strip" id="strip" aria-hidden="true"></div>
-          <div class="work-row">
-            <button class="round-btn" id="redo" aria-label="${esc(t('redo'))}">${icon.redo()}</button>
-            <div class="work" id="work">
-              <div class="work-item" id="work-item"></div>
-              <div class="pour" id="pour"></div>
-              <div class="gauge hidden" id="gauge" aria-hidden="true"><div class="gauge-ok" id="gauge-ok"></div><div class="gauge-zone" id="gauge-zone"></div><div class="gauge-fill" id="gauge-fill"></div><div class="gauge-mark" id="gauge-mark"></div></div>
-            </div>
-            <div class="tray-col">
-              <div class="tray" id="tray" aria-label="${esc(t('tray'))}"></div>
-              <button class="serve" id="serve" disabled aria-label="${esc(t('serve'))}">${icon.bell()}</button>
-            </div>
-          </div>
-          <div class="ingredients" id="ings" role="group" aria-label="${esc(t('ingredients'))}"></div>
-          <div class="hand-hint hidden" id="hand">${icon.hand()}</div>
-        </section>
-      </div>`;
-    this.bindMute();
-    $('#redo', this.o.root)?.addEventListener('click', () => {
-      if (this.busy || this.action || !this.run || this.run.steps.length === 0) return;
-      this.run.redo();
-      this.sfx('tap');
-      this.renderStation();
-    });
-    $('#serve', this.o.root)?.addEventListener('click', () => void this.serve());
-    // during a timing step, a tap anywhere on the station stops the machine
-    $('#station', this.o.root)?.addEventListener('pointerdown', () => {
-      if (this.action?.kind === 'timing') this.finishAction();
-    });
-    this.bindIngredients();
-  }
-
-  private renderDots(): void {
-    const run = this.run;
-    const el = $('#dots', this.o.root);
-    if (!run || !el) return;
-    el.innerHTML = run.orders.map((_, i) => `<i class="${i < run.index ? 'done' : i === run.index ? 'now' : ''}"></i>`).join('');
-    $('#scene', this.o.root)?.style.setProperty('--progress', String(run.index / run.orders.length));
-  }
-
-  private renderGuest(mood: Mood, extra = ''): void {
-    const el = $('#guest', this.o.root);
-    const order = this.run?.order;
-    if (!el || !order) return;
-    el.className = `guest-wrap ${extra}`;
-    el.innerHTML = customer(order.look, mood, order.kind, order.special);
-    el.dataset.kind = order.kind;
-    el.dataset.special = order.special ?? '';
-  }
-
-  private renderBubble(): void {
-    const run = this.run;
-    const el = $('#bubble', this.o.root);
-    if (!run || !el || !run.order) return;
-    const order = run.order;
-    el.innerHTML = order.items
-      .map((it, i) => {
-        const cls = i < run.tray.length ? 'ready' : i === run.tray.length ? 'active' : '';
-        const badge = it.size ? `<span class="size-badge size-${it.size}">${it.size}</span>` : '';
-        return `<div class="order-item ${cls}" data-recipe="${it.recipe}">${recipeIcon(it.steps, it.size, it.targets)}${badge}${i < run.tray.length ? `<span class="tick">${icon.check()}</span>` : ''}</div>`;
-      })
-      .join('');
-    el.setAttribute('aria-label', `${t('order')}: ${order.items.map((it) => `${name('recipes', it.recipe)}${it.size ? ` (${it.size})` : ''}`).join(', ')}`);
-  }
-
-  private drawWork(fresh: string | null, live?: { id: string; level: number }): void {
-    const run = this.run;
-    const el = $('#work-item', this.o.root);
-    if (!run || !el) return;
-    const steps = live ? [...run.steps, live.id] : run.steps;
-    const amounts = live ? [...run.amounts, live.level] : run.amounts;
-    el.innerHTML = drawItem({ steps, amounts, size: run.currentItem?.size ?? null, fresh });
-  }
-
-  /** Re-renders strip, item, gauge, tray and ingredient buttons. */
-  private renderStation(fresh: string | null = null): void {
-    const run = this.run;
-    if (!run) return;
-    const item = run.currentItem;
-    const strip = $('#strip', this.o.root);
-    if (strip) {
-      strip.innerHTML = item
-        ? item.steps
-            .map((s, i) => `<div class="step ${i < run.steps.length ? 'done' : i === run.steps.length ? 'current' : ''} act-${actionOf(s)}" data-step="${s}" data-action="${actionOf(s)}">${ingredientIcon(s)}</div>`)
-            .join('<span class="arrow">›</span>')
-        : '';
-    }
-    this.drawWork(fresh);
-    const tray = $('#tray', this.o.root);
-    if (tray) tray.innerHTML = run.tray.map((p, i) => `<div class="tray-item ${i === run.tray.length - 1 && fresh === 'tray' ? 'pop-in' : ''}">${recipeIcon(p.item.steps, p.item.size, p.amounts)}</div>`).join('');
-    const serve = $('#serve', this.o.root) as HTMLButtonElement | null;
-    if (serve) {
-      serve.disabled = !run.canServe;
-      serve.classList.toggle('ready', run.canServe);
-    }
-    const redo = $('#redo', this.o.root) as HTMLButtonElement | null;
-    if (redo) redo.disabled = run.steps.length === 0;
-    const ings = $('#ings', this.o.root);
-    if (ings) {
-      const station = getRecipe(item?.recipe ?? run.order?.items[0]?.recipe ?? 'latte').station;
-      const list = stationIngredients(station, this.p.recipes);
-      const key = list.join(',');
-      if (ings.dataset.key !== key) {
-        ings.dataset.key = key;
-        ings.innerHTML = list
-          .map((id) => `<button class="ing act-${actionOf(id)}" data-ing="${id}" aria-label="${esc(name('ingredients', id))}">${ingredientIcon(id)}</button>`)
-          .join('');
-      }
-      ings.querySelectorAll<HTMLButtonElement>('.ing').forEach((b) => {
-        b.disabled = this.busy || !item;
-        b.classList.remove('hint', 'holding');
-      });
-    }
-    this.renderBubble();
-    this.prepareGauge();
-    this.scheduleHint();
-    this.showHandHint();
-  }
-
-  /** Shows the green zone of the next pour/topping/timing step before it starts. */
-  private prepareGauge(): void {
-    const run = this.run;
-    const g = $('#gauge', this.o.root);
-    if (!run || !g) return;
-    const next = run.nextIngredient;
-    const act = next ? actionOf(next) : 'tap';
-    if (!next || act === 'tap' || this.busy) {
-      g.classList.add('hidden');
-      return;
-    }
-    const width = zoneWidth(run.day);
-    const target = run.nextTarget;
-    const lo = Math.max(0, target - width / 2);
-    const hi = Math.min(1, target + width / 2);
-    g.className = `gauge act-${act}`;
-    g.dataset.lo = String(lo);
-    g.dataset.hi = String(hi);
-    g.dataset.level = '0';
-    const zone = $('#gauge-zone', this.o.root);
-    if (zone) {
-      zone.style.bottom = `${lo * 100}%`;
-      zone.style.height = `${(hi - lo) * 100}%`;
-    }
-    const ok = $('#gauge-ok', this.o.root);
-    if (ok) {
-      const olo = Math.max(0, lo - OK_MARGIN);
-      const ohi = Math.min(1, hi + OK_MARGIN);
-      ok.style.bottom = `${olo * 100}%`;
-      ok.style.height = `${(ohi - olo) * 100}%`;
-    }
-    this.setGaugeLevel(0);
-  }
-
-  private setGaugeLevel(level: number): void {
-    const g = $('#gauge', this.o.root);
-    if (!g) return;
-    g.dataset.level = level.toFixed(3);
-    const fill = $('#gauge-fill', this.o.root);
-    if (fill) fill.style.height = `${level * 100}%`;
-    const mark = $('#gauge-mark', this.o.root);
-    if (mark) mark.style.bottom = `${level * 100}%`;
-    const lo = Number(g.dataset.lo);
-    const hi = Number(g.dataset.hi);
-    g.classList.toggle('in-zone', level >= lo && level <= hi);
-  }
-
-  private scheduleHint(): void {
-    clearTimeout(this.hintTimer);
-    const run = this.run;
-    const next = run?.nextIngredient;
-    if (!run || !next) return;
-    this.hintTimer = window.setTimeout(() => {
-      $(`.ing[data-ing="${next}"]`, this.o.root)?.classList.add('hint');
-    }, 3500);
-  }
-
-  /** First time an action appears: a hand shows what to do (tap / hold / tap in the green). */
-  private showHandHint(): void {
-    const hand = $('#hand', this.o.root);
-    const run = this.run;
-    if (!hand || !run) return;
-    const next = run.nextIngredient;
-    const kind = next ? hintKind(next) : null;
-    if (!next || !kind || this.busy || this.save.hints.includes(kind)) {
-      hand.className = 'hand-hint hidden';
-      return;
-    }
-    const btn = $(`.ing[data-ing="${next}"]`, this.o.root);
-    const station = $('#station', this.o.root);
-    if (!btn || !station) return;
-    const b = btn.getBoundingClientRect();
-    const s = station.getBoundingClientRect();
-    const z = appZoom(); // screen px → CSS px inside the (possibly zoomed) app
-    hand.style.left = `${(b.left - s.left + b.width / 2) / z - 10}px`;
-    hand.style.top = `${(b.top - s.top + b.height / 2) / z - 6}px`;
-    hand.className = `hand-hint show-${kind}`;
-  }
-
-  private markHintSeen(kind: string): void {
-    if (this.save.hints.includes(kind)) return;
-    this.save.hints.push(kind);
-    this.persist();
-    $('#hand', this.o.root)?.classList.add('hidden');
-  }
-
-  private bindIngredients(): void {
-    const ings = $('#ings', this.o.root);
-    if (!ings) return;
-    ings.addEventListener('click', (e) => {
-      const b = (e.target as HTMLElement).closest<HTMLButtonElement>('.ing');
-      if (!b || b.disabled) return;
-      if (this.suppressClick) {
-        this.suppressClick = false;
+    cv.addEventListener('pointermove', (e) => {
+      const d = this.drag;
+      if (!d || d.id !== e.pointerId || !this.duel) return;
+      d.x = e.clientX;
+      d.y = e.clientY;
+      const dx = d.x - d.x0;
+      const dy = d.y - d.y0;
+      if (len(dx, dy) < 10) {
+        this.duel.cancelAim();
         return;
       }
-      void this.addIngredient(b.dataset.ing ?? '');
-    });
-    // keyboard: hold Space/Enter to pour
-    ings.addEventListener('keydown', (e) => {
-      const b = (e.target as HTMLElement).closest<HTMLButtonElement>('.ing');
-      if (!b || b.disabled || e.repeat || (e.key !== ' ' && e.key !== 'Enter')) return;
-      if (this.action?.kind === 'timing') {
-        e.preventDefault();
-        this.finishAction();
-        return;
-      }
-      const id = b.dataset.ing ?? '';
-      if (this.isHoldStep(id)) {
-        e.preventDefault();
-        this.startAction(id, -1);
-      }
-    });
-    ings.addEventListener('keyup', (e) => {
-      if ((e.key === ' ' || e.key === 'Enter') && this.action && this.action.pointer === -1 && this.action.kind !== 'timing') this.finishAction();
-    });
-    // hold to pour + drag & drop for tap ingredients
-    let drag: { id: string; x: number; y: number; ghost: HTMLElement | null; pid: number } | null = null;
-    ings.addEventListener('pointerdown', (e) => {
-      const b = (e.target as HTMLElement).closest<HTMLButtonElement>('.ing');
-      if (!b || b.disabled || this.action) return;
-      const id = b.dataset.ing ?? '';
-      if (this.isHoldStep(id)) {
-        e.preventDefault();
-        this.suppressClick = true;
-        try {
-          b.releasePointerCapture(e.pointerId);
-        } catch {
-          /* ignore */
-        }
-        this.startAction(id, e.pointerId);
-        return;
-      }
-      if (actionOf(id) === 'tap') drag = { id, x: e.clientX, y: e.clientY, ghost: null, pid: e.pointerId };
-    });
-    window.addEventListener('pointermove', (e) => {
-      if (!drag || e.pointerId !== drag.pid) return;
-      if (!drag.ghost && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 14) {
-        drag.ghost = document.createElement('div');
-        drag.ghost.className = 'drag-ghost';
-        drag.ghost.innerHTML = ingredientIcon(drag.id);
-        document.body.appendChild(drag.ghost);
-      }
-      if (drag.ghost) {
-        drag.ghost.style.transform = `translate(${e.clientX - 36}px, ${e.clientY - 36}px)`;
-        const work = $('#work', this.o.root);
-        if (work) work.classList.toggle('drop-target', hit(work, e.clientX, e.clientY));
-      }
+      const a = pullToAim(dx, dy, this.maxPull(), this.duel.current.def);
+      this.duel.setAim(a.angle, a.power);
     });
     const end = (e: PointerEvent) => {
-      if (this.action && this.action.pointer === e.pointerId && this.action.kind !== 'timing') {
-        this.finishAction();
-        setTimeout(() => (this.suppressClick = false), 50);
-      }
-      if (!drag || e.pointerId !== drag.pid) return;
-      const d = drag;
-      drag = null;
-      if (!d.ghost) return;
-      d.ghost.remove();
-      this.suppressClick = true;
-      setTimeout(() => (this.suppressClick = false), 0);
-      const work = $('#work', this.o.root);
-      work?.classList.remove('drop-target');
-      if (work && hit(work, e.clientX, e.clientY)) void this.addIngredient(d.id);
+      const d = this.drag;
+      if (!d || d.id !== e.pointerId) return;
+      this.drag = null;
+      if (!this.duel) return;
+      if (len(d.x - d.x0, d.y - d.y0) < 14 || !this.duel.fire()) this.duel.cancelAim();
     };
-    window.addEventListener('pointerup', end);
-    window.addEventListener('pointercancel', end);
-  }
-
-  private isHoldStep(id: string): boolean {
-    const a = actionOf(id);
-    return (a === 'pour' || a === 'topping') && this.run?.nextIngredient === id && !this.busy;
-  }
-
-  /** Tap ingredients are added at once; wrong ones get a gentle oops; timing steps start the machine. */
-  private async addIngredient(id: string): Promise<void> {
-    const run = this.run;
-    const item = run?.currentItem;
-    if (!run || !item || this.busy || this.action || !INGREDIENTS[id]) return;
-    if (checkStep(item.steps, run.steps, id) === 'oops') {
-      run.add(id); // counts the mistake, adds nothing
-      this.oops();
-      return;
-    }
-    const act = actionOf(id);
-    if (act === 'timing') {
-      this.startAction(id, -2);
-      return;
-    }
-    if (act !== 'tap') {
-      // a quick tap on a pour step: pour a tiny bit (encourages holding)
-      this.startAction(id, -3);
-      setTimeout(() => this.finishAction(), 120);
-      return;
-    }
-    this.sfx('drop');
-    this.markHintSeen('tap');
-    await this.commit(id, 3, 1);
-  }
-
-  /** Starts holding (pour/topping) or a machine bar (timing). */
-  private startAction(id: string, pointer: number): void {
-    const run = this.run;
-    if (!run || this.action) return;
-    const kind = actionOf(id) as 'pour' | 'topping' | 'timing';
-    const width = zoneWidth(run.day);
-    const target = run.nextTarget;
-    const machine = machineOf(id);
-    const warm = kind === 'timing' && machine ? machineDuration(this.p.equipment[machine]) : 0;
-    const a: ActiveAction = { id, kind, pointer, start: performance.now(), level: 0, target, width, warm, raf: 0, stopSound: null };
-    this.action = a;
-    clearTimeout(this.hintTimer);
-    $('#hand', this.o.root)?.classList.add('hidden');
-    const btn = $(`.ing[data-ing="${id}"]`, this.o.root);
-    btn?.classList.add('holding');
-    btn?.classList.remove('hint');
-    const work = $('#work', this.o.root);
-    if (kind === 'pour') {
-      work?.style.setProperty('--pour', pourColor(id));
-      work?.classList.add('pouring');
-      a.stopSound = this.o.sound.loop('pour');
-    } else if (kind === 'topping') {
-      work?.classList.add('sprinkling');
-      a.stopSound = this.o.sound.loop('pour', 0.5);
-    } else {
-      work?.classList.add(id === 'blend' ? 'fx-blend' : 'fx-sizzle', 'working');
-      a.stopSound = this.o.sound.loop(id === 'blend' ? 'blend' : 'sizzle');
-      $('#gauge', this.o.root)?.classList.add('timing-run');
-    }
-    const tick = () => {
-      if (this.action !== a) return;
-      const t = performance.now() - a.start;
-      a.level = actionLevel(kind, t, a.target, a.width, a.warm, this.reduced);
-      this.setGaugeLevel(a.level);
-      this.drawWork(null, { id, level: a.level });
-      if (a.level >= 1) {
-        this.finishAction();
+    cv.addEventListener('pointerup', end);
+    cv.addEventListener('pointercancel', (e) => {
+      if (this.drag?.id === e.pointerId) {
+        this.drag = null;
+        this.duel?.cancelAim();
+      }
+    });
+    window.addEventListener('keydown', (e) => {
+      audio.unlock();
+      const duel = this.duel;
+      if (e.key === 'Escape' || e.key === 'p' || e.key === 'P') {
+        if (this.isPlaying()) this.pause();
+        else if (this.paused) this.resume();
         return;
       }
-      a.raf = requestAnimationFrame(tick);
-    };
-    a.raf = requestAnimationFrame(tick);
+      if (!duel?.humanAiming || this.paused) return;
+      const f = duel.current;
+      const aim = f.aim ?? { angle: f.restAngle(), power: 0.55 };
+      const up = f.facing === 1 ? -1 : 1;
+      let handled = true;
+      if (e.key === 'ArrowUp') duel.setAim(aim.angle + up * 0.03, aim.power);
+      else if (e.key === 'ArrowDown') duel.setAim(aim.angle - up * 0.03, aim.power);
+      else if (e.key === 'ArrowRight') duel.setAim(aim.angle, aim.power + 0.02 * f.facing);
+      else if (e.key === 'ArrowLeft') duel.setAim(aim.angle, aim.power - 0.02 * f.facing);
+      else if (e.key === ' ' || e.key === 'Enter') {
+        if (!f.aim) duel.setAim(aim.angle, aim.power);
+        else duel.fire();
+      } else if (/^[1-6]$/.test(e.key)) {
+        const id = f.setup.weapons[Number(e.key) - 1];
+        if (id && duel.selectWeapon(id)) this.refreshWeapons();
+      } else handled = false;
+      if (handled) e.preventDefault();
+    });
   }
 
-  private finishAction(): void {
-    const a = this.action;
-    const run = this.run;
-    if (!a || !run) return;
-    this.action = null;
-    cancelAnimationFrame(a.raf);
-    a.stopSound?.();
-    const work = $('#work', this.o.root);
-    work?.classList.remove('pouring', 'sprinkling', 'fx-blend', 'fx-sizzle', 'working');
-    $('#gauge', this.o.root)?.classList.remove('timing-run');
-    const level = Math.max(0.02, Math.min(1, a.level));
-    this.setGaugeLevel(level);
-    const q = judge(level, a.target, a.width);
-    this.showQuality(q);
-    this.markHintSeen(a.kind === 'timing' ? 'timing' : 'hold');
-    void this.commit(a.id, q, level);
+  // ───────────── screens ─────────────
+
+  private show(...nodes: HTMLElement[]): void {
+    clear(this.layer);
+    this.layer.append(...nodes);
   }
 
-  private showQuality(q: Quality): void {
-    this.sfx(q === 3 ? 'perfect' : q === 2 ? 'good' : 'soft');
-    if (q === 3) this.buzz(15);
-    const work = $('#work', this.o.root);
-    if (!work) return;
-    const el = document.createElement('div');
-    el.className = `quality q${q}`;
-    el.dataset.q = String(q);
-    el.innerHTML = Array.from({ length: 3 }, (_, i) => icon.star(i < q ? 'on' : 'off')).join('');
-    work.appendChild(el);
-    setTimeout(() => el.remove(), 900);
+  private btn(label: string, onclick: () => void, cls = '', attrs: Record<string, string> = {}): HTMLButtonElement {
+    return h<'button'>(`button.btn${cls ? '.' + cls.split(' ').join('.') : ''}`, {
+      ...attrs,
+      onclick: () => {
+        audio.unlock();
+        audio.play('click');
+        onclick();
+      },
+    }, label);
   }
 
-  /** Adds a validated step to the run and animates the result. */
-  private async commit(id: string, q: Quality, amount: number): Promise<void> {
-    const run = this.run;
-    if (!run) return;
-    const res = run.add(id, q, amount);
-    if (res === 'done') {
-      this.sfx('done');
-      this.busy = true;
-      const done = run.tray[run.tray.length - 1];
-      const item = $('#work-item', this.o.root);
-      if (item && done) item.innerHTML = drawItem({ steps: done.item.steps, amounts: done.amounts, size: done.item.size });
-      $('#gauge', this.o.root)?.classList.add('hidden');
-      ($('#ings', this.o.root)?.querySelectorAll<HTMLButtonElement>('.ing') ?? []).forEach((b) => (b.disabled = true));
-      await wait(this.ms(350));
-      item?.classList.add('to-tray');
-      await wait(this.ms(420));
-      this.busy = false;
-      item?.classList.remove('to-tray');
-      this.renderStation('tray');
-      if (run.canServe) this.sfx('bell');
-      else await this.maybeHelper();
-    } else {
-      this.renderStation(id);
-    }
+  private coinsBadge(): HTMLElement {
+    return h('div.coins', {}, h('span.coin'), String(this.save.coins));
   }
 
-  private oops(): void {
-    this.sfx('oops');
-    this.buzz(12);
-    const work = $('#work', this.o.root);
-    work?.classList.remove('wiggle');
-    void work?.offsetWidth;
-    work?.classList.add('wiggle');
-    if (work) {
-      const b = document.createElement('div');
-      b.className = 'oops-bubble';
-      b.textContent = t('oops');
-      work.appendChild(b);
-      setTimeout(() => b.remove(), 900);
-    }
-    this.renderGuest('oops');
-    setTimeout(() => {
-      if (!this.busy && this.run?.order) this.renderGuest('wait');
-    }, 700);
-    // after a mistake, show the right ingredient right away
-    const next = this.run?.nextIngredient;
-    if (next) $(`.ing[data-ing="${next}"]`, this.o.root)?.classList.add('hint');
+  /** Two AIs duel quietly behind the menus. */
+  private attract(world: number): void {
+    const level = 4 + Math.floor(Math.random() * 4);
+    const L = generateLevel(world, level, { seed: Math.floor(Math.random() * 1e9), forceBoss: false });
+    const setupL: FighterSetup = { look: 'hero', hat: this.save.equipped.hat, color: this.save.equipped.color, weapons: ['bow'], weapon: 'bow', hp: 9999, ai: true };
+    const setupR: FighterSetup = { look: L.world.enemy, hat: 'none', color: 'red', weapons: L.world.enemyWeapons, weapon: L.world.enemyWeapons[0] ?? 'bow', hp: 9999, ai: true };
+    this.session = { mode: 'adventure', world, level, L, tryWeapon: null, revived: false, wave: 0, endlessHp: 100, attract: true };
+    this.setDuel(new Duel(L, { mode: 'adventure', left: setupL, right: setupR }));
+    this.duel?.start();
+    this.hud.classList.add('hidden');
   }
 
-  private async nextCustomer(): Promise<void> {
-    const run = this.run;
-    if (!run) return;
-    if (run.finished) {
-      this.endDay();
-      return;
-    }
-    this.renderDots();
-    this.busy = true;
-    this.renderGuest('wait', 'enter');
-    this.sfx('door');
-    $('#bubble', this.o.root)?.classList.add('hidden');
-    this.renderStation();
-    await wait(this.ms(550));
-    $('#bubble', this.o.root)?.classList.remove('hidden');
-    this.renderGuest('wait');
-    this.busy = false;
-    this.renderStation();
-    this.watch.start();
-    const sp = run.order?.special;
-    if (sp) {
-      this.sfx('unlock');
-      this.toast(t(sp), sp === 'vip' ? icon.crown() : icon.star());
-    }
-    await this.maybeHelper();
+  private attractTick(): void {
+    if (this.duel && this.duel.turnNumber > 14) this.attract(this.session?.world ?? 1);
   }
 
-  /** A hired helper prepares simple items (coffee, juice, croissant, toastie) by themself. */
-  private async maybeHelper(): Promise<void> {
-    const run = this.run;
-    const item = run?.currentItem;
-    if (!run || !item || this.busy || run.steps.length > 0 || !cafeEffects(this.save.meta, Date.now()).staff.includes(item.recipe)) return;
-    this.busy = true;
-    this.renderStation();
-    const badge = $('#helper', this.o.root);
-    badge?.classList.remove('hidden');
-    badge?.setAttribute('aria-label', t('staffHelping'));
-    this.sfx('pour', 0.8);
-    await wait(this.ms(1300));
-    badge?.classList.add('hidden');
-    if (this.run !== run) return;
-    run.autoComplete();
-    this.busy = false;
-    this.sfx('done');
-    this.renderStation('tray');
-    if (run.canServe) this.sfx('bell');
-    else await this.maybeHelper();
+  private setDuel(d: Duel): void {
+    this.duel?.destroy();
+    this.duel = d;
+    if (this.scene) this.scene.setDuel(d);
+    else this.scene = new SceneRenderer(d);
+    this.scene.cam.update(d, this.view, 0, true);
+    d.on((e) => this.onEvent(e));
   }
 
-  private async serve(): Promise<void> {
-    const run = this.run;
-    const order = run?.order;
-    if (!run || !order || this.busy || this.action || !run.canServe) return;
-    this.busy = true;
-    clearTimeout(this.hintTimer);
-    const before = this.p.coins;
-    const fx = cafeEffects(this.save.meta, Date.now());
-    const mods: PayMods = { tipBonus: fx.tipBonus, bonusStations: fx.bonusStations };
-    const pay = run.serve(this.watch.elapsed(), mods) as Payment;
-    this.p.coins += pay.total;
-    this.p.gems += pay.gems;
-    this.save.stats.customers += 1;
-    this.save.stats.earned += pay.total;
-    this.persist();
-    this.sfx('bell');
-    this.buzz(pay.stars === 3 ? [20, 40, 20] : 20);
-    const serveBtn = $('#serve', this.o.root) as HTMLButtonElement | null;
-    if (serveBtn) {
-      serveBtn.disabled = true;
-      serveBtn.classList.remove('ready');
-    }
-    $('#tray', this.o.root)?.classList.add('served');
-    $('#bubble', this.o.root)?.classList.add('hidden');
-    this.showGuestReaction(order, pay.stars);
-    setTimeout(() => this.sfx(pay.stars === 3 ? 'happy' : pay.stars === 2 ? 'good' : 'soft'), 150);
-    this.showPayment(pay, before);
-    // orders below 3★ can be upgraded on the end-of-day summary (never on the gameplay screen)
-    if (pay.stars < 3) this.weakOrders.push({ items: order.items, special: order.special, pay, mods });
-    await wait(this.ms(1600));
-    if (this.challenge) {
-      const el = $('#challenge-stars', this.o.root);
-      if (el) el.textContent = `${run.summary.stars}/${CHALLENGE_STARS}`;
-    }
-    const events = onServed(
-      this.save.meta,
-      this.p,
-      { recipes: order.items.map((i) => i.recipe), sizes: order.items.map((i) => i.size), stars: pay.stars, coins: pay.total, special: order.special, kind: order.kind },
-      this.rng,
+  title(): void {
+    this.paused = false;
+    this.resultShown = false;
+    this.tracker.stop();
+    audio.music('menu');
+    if (!this.session?.attract || !this.duel) this.attract(this.mapWorld);
+    const logo = h('div.logo', {}, h('span.l1', {}, 'Stick'), h('span.l2', {}, 'Duel'));
+    this.show(
+      h('div.screen.title', {},
+        h('div.topbar', {}, h('span'), this.coinsBadge()),
+        logo,
+        h('p.tagline', {}, t('title.tagline')),
+        h('div.menu', {},
+          this.btn(t('menu.play'), () => this.map(), 'primary big', { id: 'play' }),
+          h('div.row', {},
+            this.btn(t('menu.versus'), () => this.versusSetup(), '', { id: 'versus' }),
+            this.btn(t('menu.endless'), () => this.endlessSetup(), '', { id: 'endless' }),
+          ),
+          h('div.row', {},
+            this.btn(t('menu.shop'), () => this.shop('weapon'), '', { id: 'shop' }),
+            this.btn(t('menu.settings'), () => this.settings(() => this.title()), '', { id: 'settings' }),
+          ),
+        ),
+      ),
     );
-    events.push(...settleBuilds(this.save.meta, this.p, Date.now()));
-    if (pay.stars === 3) this.save.stats.perfect += 1;
+  }
+
+  map(world = this.mapWorld): void {
+    this.mapWorld = world;
+    this.save.lastWorld = world;
     this.persist();
-    this.updateWallet();
-    const guest = $('#guest', this.o.root);
-    if (guest) guest.className = 'guest-wrap leave';
-    await wait(this.ms(450));
-    $('#tray', this.o.root)?.classList.remove('served');
-    await this.showRewards(events);
-    this.busy = false;
-    await this.nextCustomer();
+    audio.music('menu');
+    if (!this.session?.attract || this.session.world !== world) this.attract(world);
+    const W = worldByIndex(world);
+    const unlocked = worldUnlocked(this.save, world);
+    const path = h('div.path', {});
+    for (let l = 1; l <= LEVELS_PER_WORLD; l++) {
+      const open = levelUnlocked(this.save, world, l);
+      const stars = starsOf(this.save, world, l);
+      const node = h<'button'>(`button.node${l === LEVELS_PER_WORLD ? '.boss' : ''}${open ? '' : '.locked'}${stars ? '.done' : ''}`, {
+        'data-level': l,
+        'aria-label': t('intro.level', { n: l }),
+        disabled: !open,
+        onclick: () => {
+          audio.play('click');
+          this.intro(world, l);
+        },
+      },
+        h('span.num', {}, l === LEVELS_PER_WORLD ? '★' : String(l)),
+        h('span.stars', {}, ...[1, 2, 3].map((i) => h(`i${i <= stars ? '.on' : ''}`))),
+      );
+      path.append(node);
+    }
+    const tabs = h('div.tabs', {}, ...WORLDS.map((w) =>
+      h<'button'>(`button.tab${w.index === world ? '.on' : ''}${worldUnlocked(this.save, w.index) ? '' : '.locked'}`, {
+        'data-world': w.index,
+        onclick: () => {
+          audio.play('click');
+          this.map(w.index);
+        },
+      }, String(w.index)),
+    ));
+    this.show(
+      h('div.screen.map', {},
+        h('div.topbar', {}, this.btn('‹ ' + t('common.back'), () => this.title(), 'small'), this.coinsBadge()),
+        h('div.card.mapcard', {},
+          h('div.maphead', {},
+            this.btn('‹', () => this.map(Math.max(1, world - 1)), 'round', { 'aria-label': 'previous world' }),
+            h('div', {}, h('h2', {}, t(`world.${W.id}` as Key)), h('div.sub', {}, `★ ${t('map.stars', { n: worldStars(this.save, world) })}`)),
+            this.btn('›', () => this.map(Math.min(WORLDS.length, world + 1)), 'round', { 'aria-label': 'next world' }),
+          ),
+          tabs,
+          unlocked ? path : h('div.lockmsg', {}, h('div.lockicon'), t('map.unlock', { boss: t(`boss.${worldByIndex(world - 1).boss.id}.name` as Key) })),
+        ),
+      ),
+    );
+    if (unlocked) requestAnimationFrame(() => drawPath(path));
   }
 
-  private showGuestReaction(order: Order, stars: number): void {
-    const guest = $('#guest', this.o.root);
-    const mood: Mood = stars === 3 ? 'happy' : stars === 2 ? 'smile' : 'meh';
-    if (!guest) return;
-    guest.className = `guest-wrap ${stars === 3 ? 'hop' : stars === 2 ? 'nod' : ''}`;
-    guest.innerHTML = customer(order.look, mood, order.kind, order.special);
-    guest.dataset.stars = String(stars);
+  private enemyName(L: LevelDef): string {
+    return L.boss ? t(`boss.${L.world.boss.id}.name` as Key) : t(`enemy.${L.world.enemy}` as Key);
   }
 
-  private showPayment(pay: Payment, before: number): void {
-    const fx = $('#fx', this.o.root);
-    if (fx) {
-      const stars = Array.from({ length: 3 }, (_, i) => icon.star(i < pay.stars ? 'on' : 'off')).join('');
-      const pop = document.createElement('div');
-      pop.className = `pay-pop stars-${pay.stars}`;
-      pop.dataset.stars = String(pay.stars);
-      pop.innerHTML = `<div class="stars-row">${stars}</div><div class="pay-amount">+${pay.total} ${icon.coin()}</div>${pay.tip ? `<div class="pay-tip">${icon.jar()}+${pay.tip}</div>` : ''}${pay.gems ? `<div class="pay-tip">${icon.gem()}+${pay.gems}</div>` : ''}`;
-      fx.appendChild(pop);
-      setTimeout(() => pop.remove(), 1700);
-      if (!this.reduced) {
-        const target = $('#coins', this.o.root)?.getBoundingClientRect();
-        const origin = fx.getBoundingClientRect();
-        for (let i = 0; i < Math.min(8, 2 + Math.floor(pay.total / 4)); i++) {
-          const c = document.createElement('div');
-          c.className = 'fly-coin';
-          c.innerHTML = icon.coin();
-          const z = appZoom();
-          const sx = origin.width / z / 2 + (i % 3) * 14 - 14;
-          const sy = (origin.height / z) * 0.45;
-          c.style.left = `${sx}px`;
-          c.style.top = `${sy}px`;
-          if (target) {
-            c.style.setProperty('--tx', `${(target.left + target.width / 2 - origin.left) / z - sx - 14}px`);
-            c.style.setProperty('--ty', `${(target.top + target.height / 2 - origin.top) / z - sy - 14}px`);
+  intro(world: number, level: number, mode: Mode = 'adventure'): void {
+    const L = generateLevel(world, level);
+    this.session = { mode, world, level, L, tryWeapon: null, revived: false, wave: 0, endlessHp: 100, attract: false };
+    this.prepareDuel();
+    this.showIntro();
+  }
+
+  private prepareDuel(): void {
+    const s = this.session;
+    if (!s) return;
+    const L = s.L;
+    const weapons = [...this.save.weapons];
+    if (s.tryWeapon && !weapons.includes(s.tryWeapon)) weapons.push(s.tryWeapon);
+    const weapon = s.tryWeapon ?? (weapons.includes(this.save.equipped.weapon) ? this.save.equipped.weapon : 'bow');
+    const left: FighterSetup = { look: 'hero', hat: this.save.equipped.hat, color: this.save.equipped.color, weapons, weapon, hp: s.mode === 'endless' ? s.endlessHp : L.playerHp, maxHp: L.playerHp, ai: false };
+    let right: FighterSetup;
+    if (s.mode === 'versus') {
+      right = { look: 'hero2', hat: 'cap', color: this.save.equipped.color === 'red' ? 'green' : 'red', weapons, weapon: 'bow', hp: 100, ai: false };
+    } else {
+      right = { look: L.enemy.kind, hat: 'none', color: 'red', weapons: L.enemy.weapons, weapon: L.enemy.weapons[0] ?? 'bow', hp: L.enemy.hp, ai: true, scale: L.enemy.scale, boss: L.enemy.boss };
+    }
+    this.setDuel(new Duel(L, { mode: s.mode, left, right }));
+    audio.music(L.world.id);
+    this.hud.classList.add('hidden');
+  }
+
+  private showIntro(): void {
+    const s = this.session;
+    const duel = this.duel;
+    if (!s || !duel) return;
+    const L = s.L;
+    const W = L.world;
+    const wind = Math.abs(L.wind.base) < 0.05 && L.wind.gust < 0.05 ? t('intro.calm') : `${windLabel(L.wind.base)}${L.wind.gust > 0.5 ? ' ~' : ''}`;
+    const weaponRow = h('div.weaponpick', {});
+    const left = duel.fighters[0];
+    const rebuild = () => {
+      clear(weaponRow);
+      for (const id of left.setup.weapons) {
+        weaponRow.append(h<'button'>(`button.wbtn${left.weapon === id ? '.on' : ''}`, {
+          'data-weapon': id,
+          title: t(`weapon.${id}` as Key),
+          onclick: () => {
+            audio.play('click');
+            left.weapon = id;
+            this.save.equipped.weapon = this.save.weapons.includes(id) ? id : this.save.equipped.weapon;
+            this.persist();
+            rebuild();
+          },
+        }, h('img', { src: this.icons.get(id) ?? '', alt: '' })));
+      }
+    };
+    rebuild();
+    // offer to try one locked weapon with a rewarded ad
+    const locked = PLAYER_WEAPONS.find((id) => !this.save.weapons.includes(id) && id !== s.tryWeapon);
+    let tryBtn: HTMLElement | null = null;
+    if (s.mode === 'adventure' && locked && !s.tryWeapon && this.platform.adsUnavailable() === null) {
+      tryBtn = this.btn(`▶ ${t('intro.try', { w: t(`weapon.${locked}` as Key) })}`, () => {
+        void this.rewarded().then((ok) => {
+          if (!ok) return;
+          s.tryWeapon = locked;
+          this.prepareDuel();
+          this.showIntro();
+        });
+      }, 'ad small', { id: 'try-weapon' });
+    }
+    const bossIntro = L.boss ? h('p.bossline', {}, `“${t(`boss.${W.boss.id}.intro` as Key)}”`) : null;
+    const header = s.mode === 'endless' ? t('hud.wave', { n: s.wave + 1 }) : s.mode === 'versus' ? t('versus.title') : L.boss ? t('intro.boss') : t('intro.level', { n: L.level });
+    const card = h(`div.card.intro${L.boss ? '.isboss' : ''}`, {},
+      h('div.introhead', {}, h('span.worldname', {}, t(`world.${W.id}` as Key)), h('h2', {}, header)),
+      h('div.vs', {},
+        h('div.side', {}, h('img.portrait', { src: this.portrait(left), alt: '' }), h('b', {}, s.mode === 'versus' ? t('hud.p1') : t('hud.you'))),
+        h('span.vstext', {}, t('intro.vs')),
+        h('div.side', {}, h('img.portrait', { src: this.portrait(duel.fighters[1]), alt: '' }), h('b', {}, s.mode === 'versus' ? t('hud.p2') : this.enemyName(L))),
+      ),
+      bossIntro,
+      h('div.info', {}, h('span', {}, `${t('intro.wind')}: ${wind}`), s.mode === 'versus' ? null : h('span', {}, `❤ ${duel.fighters[1].hp}`)),
+      h('div.label', {}, t('intro.weapon')),
+      weaponRow,
+      tryBtn,
+      !this.save.tutorial && s.mode === 'adventure' ? h('p.tip', {}, t('intro.tutorial')) : null,
+      h('div.row', {},
+        this.btn('‹', () => (s.mode === 'adventure' ? this.map(s.world) : this.title()), 'round', { 'aria-label': t('common.back') }),
+        this.btn(t('intro.fight'), () => this.fight(), 'primary big', { id: 'fight' }),
+      ),
+    );
+    if (L.boss) audio.play('boss');
+    this.show(h('div.screen.introscreen', {}, card));
+  }
+
+  private portrait(f: Fighter): string {
+    return fighterPortrait(f.setup, 96);
+  }
+
+  fight(): void {
+    const duel = this.duel;
+    if (!duel || !this.session) return;
+    this.show();
+    this.resultShown = false;
+    this.buildHud();
+    this.hud.classList.remove('hidden');
+    duel.start();
+    this.tracker.start();
+    if (!this.save.tutorial) this.flash(t('hud.dragHint'), 'hint', 2600);
+  }
+
+  // ───────────── HUD ─────────────
+
+  private buildHud(): void {
+    const duel = this.duel;
+    const s = this.session;
+    if (!duel || !s) return;
+    clear(this.hud);
+    const bar = (side: Side, name: string) => {
+      const fill = h('i');
+      const num = h('span.num', {}, String(duel.fighters[side].hp));
+      this.hudRefs[`hp${side}`] = fill;
+      this.hudRefs[`num${side}`] = num;
+      return h(`div.hp.s${side}`, {}, h('img.mini', { src: this.portrait(duel.fighters[side]), alt: '' }), h('div.col', {}, h('span.name', {}, name), h('div.bar', {}, fill)), num);
+    };
+    const label = s.mode === 'endless' ? t('hud.wave', { n: s.wave + 1 }) : s.mode === 'versus' ? '2P' : `${s.world}-${s.level}`;
+    const wind = h('div.wind', {}, h('span.arrow'), h('span.val'));
+    this.hudRefs.wind = wind;
+    const timer = h('div.timer', {});
+    this.hudRefs.timer = timer;
+    const weapons = h('div.weapons', {});
+    this.hudRefs.weapons = weapons;
+    const toast = h('div.toast', {});
+    this.hudRefs.toast = toast;
+    this.hud.append(
+      h('div.hudtop', {},
+        bar(0, s.mode === 'versus' ? t('hud.p1') : t('hud.you')),
+        h('div.mid', {}, h('div.lvl', {}, label), wind, timer),
+        bar(1, s.mode === 'versus' ? t('hud.p2') : this.enemyName(s.L)),
+      ),
+      h<'button'>('button.pause', { 'aria-label': t('pause.title'), id: 'pause', onclick: () => this.pause() }, h('span'), h('span')),
+      toast,
+      weapons,
+    );
+    this.refreshWeapons();
+    this.updateHud();
+  }
+
+  private refreshWeapons(): void {
+    const el = this.hudRefs.weapons;
+    const duel = this.duel;
+    if (!el || !duel) return;
+    clear(el);
+    const f = duel.current;
+    if (f.setup.ai || duel.phase === 'over') return;
+    f.setup.weapons.forEach((id, i) => {
+      el.append(h<'button'>(`button.wbtn${f.weapon === id ? '.on' : ''}`, {
+        'data-weapon': id,
+        title: `${t(`weapon.${id}` as Key)} (${i + 1})`,
+        onpointerdown: (e: Event) => e.stopPropagation(),
+        onclick: () => {
+          if (duel.selectWeapon(id)) {
+            audio.play('click');
+            this.refreshWeapons();
           }
-          c.style.animationDelay = `${300 + i * 70}ms`;
-          fx.appendChild(c);
-          setTimeout(() => c.remove(), 1400 + i * 70);
+        },
+      }, h('img', { src: this.icons.get(id) ?? '', alt: t(`weapon.${id}` as Key) })));
+    });
+    el.classList.toggle('right', duel.turn === 1);
+  }
+
+  private updateHud(): void {
+    const duel = this.duel;
+    if (!duel) return;
+    for (const side of [0, 1] as const) {
+      const f = duel.fighters[side];
+      const fill = this.hudRefs[`hp${side}`];
+      const num = this.hudRefs[`num${side}`];
+      if (fill) {
+        fill.style.width = `${(f.hp / f.maxHp) * 100}%`;
+        fill.classList.toggle('low', f.hp / f.maxHp < 0.3);
+      }
+      if (num) num.textContent = String(f.hp);
+    }
+    const wind = this.hudRefs.wind;
+    if (wind) {
+      const v = duel.wind;
+      wind.classList.toggle('calm', Math.abs(v) < 0.05);
+      wind.style.setProperty('--dir', v < 0 ? '-1' : '1');
+      wind.style.setProperty('--str', String(Math.min(1, Math.abs(v) / 3.5)));
+      const val = wind.querySelector('.val');
+      if (val) val.textContent = Math.abs(v) < 0.05 ? t('intro.calm') : windLabel(v);
+    }
+    const timer = this.hudRefs.timer;
+    if (timer) {
+      const show = duel.humanAiming && duel.turnLeft < 8;
+      timer.textContent = show ? String(Math.ceil(duel.turnLeft)) : '';
+      timer.classList.toggle('on', show);
+    }
+  }
+
+  private toast(text: string, cls = ''): void {
+    const el = this.hudRefs.toast;
+    if (!el) return;
+    el.textContent = text;
+    el.className = `toast show ${cls}`;
+    window.clearTimeout(Number(el.dataset.timer));
+    el.dataset.timer = String(window.setTimeout(() => el.classList.remove('show'), 1300));
+  }
+
+  private flash(text: string, cls: string, ms = 1100): void {
+    const b = this.banner;
+    b.textContent = text;
+    b.className = `banner show ${cls}`;
+    window.clearTimeout(Number(b.dataset.timer));
+    b.dataset.timer = String(window.setTimeout(() => (b.className = 'banner'), ms));
+  }
+
+  // ───────────── duel events ─────────────
+
+  private onEvent(e: DuelEvent): void {
+    const duel = this.duel;
+    const scene = this.scene;
+    if (!duel || !scene) return;
+    const quiet = !!this.session?.attract;
+    const fx = scene.fx;
+    const vol = quiet ? 0 : 1;
+    const snd = (n: Parameters<typeof audio.play>[0], o: { pitch?: number; volume?: number } = {}) => {
+      if (!quiet) audio.play(n, { ...o, volume: (o.volume ?? 1) * vol });
+    };
+    switch (e.type) {
+      case 'fire':
+        snd(e.weapon.sound, { pitch: 0.9 + Math.random() * 0.2 });
+        if (e.weapon.spin) snd('spin');
+        if (!quiet) this.refreshWeapons();
+        if (e.side === 0 && !this.save.tutorial && !quiet) {
+          this.save.tutorial = true;
+          this.persist();
         }
+        break;
+      case 'hit': {
+        const head = e.zone === 'head';
+        fx.hit(e.x, e.y, head);
+        fx.text(e.x, e.y - 0.4, `-${e.dmg}`, head ? '#ffd23d' : '#ffffff', head);
+        snd('hit', { pitch: head ? 1.15 : 0.9 + Math.random() * 0.2 });
+        if (head) {
+          snd('headshot');
+          if (!quiet) this.flash(t('hud.headshot'), 'headshot');
+        }
+        if (e.ko) {
+          snd('ko');
+          if (!quiet) window.setTimeout(() => this.flash(t('hud.ko'), 'ko', 1400), head ? 500 : 0);
+        }
+        if (e.weapon.look === 'snowball') fx.burst('snow', e.x, e.y, 18, { speed: 4, size: 0.07, color: '#ffffff', life: 0.8, g: 6 });
+        if (e.weapon.look === 'bolt') fx.burst('magic', e.x, e.y, 16, { speed: 4, size: 0.08, color: ['#d6a8ff', '#ffffff'], life: 0.6, g: 0 });
+        if (!quiet) this.updateHud();
+        break;
       }
-    }
-    const el = $('#coin-count', this.o.root);
-    const after = this.p.coins;
-    const steps = this.reduced ? 1 : 12;
-    for (let i = 1; i <= steps; i++) {
-      setTimeout(() => {
-        if (el) el.textContent = String(Math.round(before + ((after - before) * i) / steps));
-        if (i === 1 || i === steps) this.sfx('coin');
-      }, (this.reduced ? 0 : 450) + i * 45);
-    }
-    setTimeout(() => $('#coins', this.o.root)?.classList.add('bump'), 400);
-    setTimeout(() => $('#coins', this.o.root)?.classList.remove('bump'), 1100);
-  }
-
-  // ------------------------------------------------------------------ day flow
-
-  private async startDay(): Promise<void> {
-    clearInterval(this.ticker);
-    const meta = this.save.meta;
-    const fx = cafeEffects(meta, Date.now());
-    startDayMeta(meta);
-    if (this.challenge) {
-      const today = this.today();
-      this.run = new DayRun(this.p.day, this.p.recipes, mulberry32(challengeSeed(today)), undefined, guestOptions(meta), 0, CHALLENGE_GUESTS);
-    } else {
-      this.seed = (this.seed + 0x9e3779b9) >>> 0;
-      this.run = new DayRun(this.p.day, this.p.recipes, mulberry32(this.seed ^ this.p.day), this.preferNext ?? undefined, guestOptions(meta, this.vipNext ? 'vip' : null), fx.extraGuests);
-      this.preferNext = null;
-      this.vipNext = false;
-    }
-    this.persist();
-    this.lastSummaryDoubled = false;
-    this.weakOrders = [];
-    this.renderPlay();
-    this.sfx('day');
-    const banner = document.createElement('div');
-    banner.className = 'day-banner';
-    banner.innerHTML = this.challenge
-      ? `${icon.calendar()}<span>${esc(t('challengeGoal', { n: CHALLENGE_STARS }))}</span>`
-      : `${icon.sun()}<span>${esc(t('day', { n: this.p.day }))}</span>`;
-    $('.scene', this.o.root)?.appendChild(banner);
-    await wait(this.ms(this.challenge ? 1400 : 900));
-    banner.remove();
-    this.gameplay.start();
-    await this.nextCustomer();
-  }
-
-  private endDay(): void {
-    const run = this.run;
-    if (!run) return;
-    this.gameplay.stop();
-    clearTimeout(this.hintTimer);
-    if (this.challenge) {
-      this.challengeResult = finishChallenge(this.save.meta, this.p, this.today(), run.summary.stars);
-      this.dayChestEvents = [];
-    } else {
-      this.p.day = run.day + 1;
-      this.save.stats.days += 1;
-      this.dayChestEvents = claimDayChest(this.save.meta, this.p, run.day, run.summary.served, run.summary.perfect);
-    }
-    this.persist();
-    this.renderSummary();
-    void this.showRewards([...this.dayChestEvents, ...(this.challengeResult ?? [])].filter((e) => e.source === 'level'));
-  }
-
-  private renderSummary(): void {
-    const run = this.run;
-    if (!run) return;
-    const s = run.summary;
-    const ch = this.challenge;
-    const won = ch && (this.challengeResult?.length ?? 0) > 0;
-    const chest = dayChest(s.served, s.perfect);
-    this.o.root.innerHTML = `
-      <div class="screen summary-screen">
-        <header class="hud">${this.levelPill()}${this.coinPill()}${this.gemPill()}${this.muteButton()}</header>
-        <section class="summary-card">
-          <div class="sunset">${ch ? icon.calendar() : icon.sun()}</div>
-          <h2>${esc(ch ? (won ? t('challengeWon') : t('challenge')) : t('dayDone', { n: s.day }))}</h2>
-          ${ch ? `<p class="goal ${won ? 'won' : ''}" id="challenge-result">${icon.star()}<b>${s.stars}</b>/<span>${CHALLENGE_STARS}</span></p>${won ? '' : `<p class="muted-note">${esc(t('challengeLost'))}</p>`}` : ''}
-          <ul class="stats">
-            <li>${icon.guest()}<span>${esc(t('served'))}</span><b>${s.served}</b></li>
-            <li>${icon.coin()}<span>${esc(t('earnedBase'))}</span><b>${s.base}</b></li>
-            <li>${icon.jar()}<span>${esc(t('earnedTips'))}</span><b>${s.tips}</b></li>
-            <li>${icon.star()}<span>${esc(t('perfect'))}</span><b>${s.perfect}</b></li>
-            ${s.gems ? `<li>${icon.gem()}<span>${esc(t('gems'))}</span><b>${s.gems}</b></li>` : ''}
-          </ul>
-          ${!ch ? `<div class="day-bonus">${icon.gift()}<span>${esc(t('dayBonus'))}</span><div class="reward-chips">${this.chips(chest)}</div></div>` : won ? `<div class="day-bonus">${icon.gift()}<div class="reward-chips">${this.chips({ coins: 120, gems: 4, xp: 40 })}</div></div>` : ''}
-          <div class="total">${icon.coin()}<span>${esc(t('total'))}</span><b id="day-total">+${s.earned * (this.lastSummaryDoubled ? 2 : 1)}</b></div>
-        </section>
-        ${this.missionsCard()}
-        <div class="menu">
-          ${s.earned > 0 && !this.lastSummaryDoubled && this.videosOk() ? `<button class="btn" id="double">${icon.video()}<span>${esc(t('double'))}</span><b>×2</b></button>` : ''}
-          ${this.redoOffer()}
-          ${this.adNote()}
-          <div class="row">
-            <button class="btn" id="hub">${icon.back()}<span>${esc(t('toCafe'))}</span></button>
-            <button class="btn" id="shop">${icon.shop()}<span>${esc(t('shop'))}</span></button>
-          </div>
-          ${ch ? '' : `<button class="btn primary big" id="next">${icon.next()}<span>${esc(t('nextDay'))}</span></button>`}
-        </div>
-      </div>`;
-    this.bindMute();
-    this.bindMissions(() => this.renderSummary());
-    $('#double', this.o.root)?.addEventListener('click', () => void this.doubleCoins());
-    $('#redo-video', this.o.root)?.addEventListener('click', () => void this.redoWeakest('video'));
-    $('#redo-gems', this.o.root)?.addEventListener('click', () => void this.redoWeakest('gems'));
-    $('#hub', this.o.root)?.addEventListener('click', () => {
-      this.sfx('tap');
-      this.leaveSummary(() => this.renderHub());
-    });
-    $('#shop', this.o.root)?.addEventListener('click', () => {
-      this.sfx('tap');
-      this.shopReturn = () => this.renderSummary();
-      this.renderShop();
-    });
-    $('#next', this.o.root)?.addEventListener('click', () => void this.goNextDay());
-  }
-
-  private async doubleCoins(): Promise<void> {
-    const run = this.run;
-    const btn = $('#double', this.o.root) as HTMLButtonElement | null;
-    if (!run || this.lastSummaryDoubled || !btn) return;
-    btn.disabled = true;
-    if (!(await this.watchVideo())) {
-      this.renderSummary();
-      return;
-    }
-    this.lastSummaryDoubled = true;
-    this.p.coins += run.summary.earned;
-    this.persist();
-    this.sfx('coin');
-    this.toast(t('doubled'), icon.coin());
-    this.renderSummary();
-  }
-
-  /** "Make one order 3★": the weakest order of the day, with a video or gems (alternative). */
-  private redoOffer(): string {
-    if (!this.weakOrders.length || !canUseAd(this.save.meta, 'redo', this.today())) return '';
-    const video = this.videosOk() ? `<button class="btn" id="redo-video">${icon.video()}<span>${esc(t('redo3'))}</span></button>` : '';
-    const gems = `<button class="btn" id="redo-gems" ${this.p.gems >= REDO_GEMS ? '' : 'disabled'}>${icon.gem()}<span>${REDO_GEMS} · ${esc(t('redo3'))}</span></button>`;
-    return `<div class="row redo-row">${video}${gems}</div>`;
-  }
-
-  private async redoWeakest(how: 'video' | 'gems'): Promise<void> {
-    const run = this.run;
-    if (!run || !this.weakOrders.length) return;
-    // the order that gains the most
-    const scored = this.weakOrders.map((w) => ({ w, extra: DayRun.upgradeTo3(w.pay, w.items, { ...w.mods, special: w.special }) }));
-    scored.sort((a, b) => b.extra.total - a.extra.total);
-    const best = scored[0];
-    if (!best) return;
-    if (how === 'gems') {
-      if (this.p.gems < REDO_GEMS) return;
-      this.p.gems -= REDO_GEMS;
-    } else {
-      this.o.root.querySelectorAll<HTMLButtonElement>('.redo-row button').forEach((b) => (b.disabled = true));
-      if (!(await this.watchVideo())) {
-        this.renderSummary();
-        return;
+      case 'blast':
+        fx.blast(e.x, e.y, e.r, e.weapon.look === 'meteor');
+        snd('explosion');
+        break;
+      case 'thud': {
+        const colors: Record<string, string[]> = {
+          grass: ['#6cc24a', '#8a5a3b'], wood: ['#c98b4a', '#8a5a3b'], sand: ['#f5cf7d', '#e3ab5c'], sandstone: ['#e9a463'], cactus: ['#5cbf5a'], snow: ['#ffffff'],
+        };
+        fx.burst('dust', e.x, e.y, 8, { speed: 2.5, size: 0.08, color: colors[e.mat] ?? ['#d9d2c5'], life: 0.5, g: 5 });
+        if (duel.level.floor.kind === 'lava' && e.y >= duel.level.floor.y - 0.1) {
+          fx.burst('ember', e.x, e.y, 10, { speed: 3, size: 0.08, color: ['#ffb347', '#ff6a1f'], life: 0.7, g: 3 });
+          snd('splash', { pitch: 0.7 });
+        } else if (duel.level.floor.kind === 'lake' && e.y >= duel.level.floor.y - 0.1) {
+          fx.burst('snow', e.x, e.y, 10, { speed: 3, size: 0.06, color: '#dff4ff', life: 0.6, g: 6 });
+          snd('splash');
+        } else snd('thud');
+        break;
       }
+      case 'clink':
+        fx.burst('spark', e.x, e.y, 6, { speed: 4, size: 0.06, color: ['#ffffff', '#fff2a8'], life: 0.25, g: 0 });
+        if (e.mat === 'ice') fx.burst('shard', e.x, e.y, 5, { speed: 3, size: 0.07, color: '#cfefff', life: 0.6, g: 8 });
+        snd('clink');
+        break;
+      case 'burst':
+        fx.burst(e.weapon.look === 'snowball' ? 'snow' : 'magic', e.x, e.y, 16, { speed: 4, size: 0.08, color: e.weapon.look === 'snowball' ? '#ffffff' : ['#d6a8ff', '#ffffff'], life: 0.7, g: 4 });
+        snd(e.weapon.look === 'snowball' ? 'thud' : 'magic', { pitch: 1.3 });
+        break;
+      case 'leaves':
+        fx.burst('leaf', e.x, e.y, 5, { speed: 2, size: 0.12, color: ['#7fd14a', '#4f9e3a', '#f2b13d'], life: 1.8, g: 1.5 });
+        break;
+      case 'miss':
+        if (!quiet && duel.fighters[e.side] && !duel.fighters[e.side].setup.ai) this.toast(t('hud.miss'));
+        break;
+      case 'fall': {
+        const lava = duel.level.floor.kind === 'lava';
+        fx.burst(lava ? 'ember' : 'snow', e.x, e.y, 18, { speed: 4, size: 0.1, color: lava ? ['#ffb347', '#ff6a1f'] : ['#ffffff', '#cfefff'], life: 0.8, g: 5 });
+        if (e.dmg > 0) fx.text(e.x, e.y - 1, `-${e.dmg}`, '#ffffff');
+        snd('splash');
+        if (!quiet) {
+          this.toast(t('hud.fall'));
+          this.updateHud();
+        }
+        break;
+      }
+      case 'crumble':
+        fx.burst('dust', e.x, e.y, 14, { speed: 2, size: 0.15, color: ['#4d3f42', '#ff7a2a'], life: 0.9, g: 4 });
+        snd('crumble');
+        break;
+      case 'turn':
+        if (quiet) break;
+        this.refreshWeapons();
+        this.updateHud();
+        if (this.session?.mode === 'versus') this.toast(e.side === 0 ? t('hud.p1Turn') : t('hud.p2Turn'), e.side === 0 ? 'p1' : 'p2');
+        else if (e.side === 0) this.toast(t('hud.yourTurn'), 'p1');
+        else this.toast(t('hud.enemyTurn'), 'p2');
+        if (!duel.fighters[e.side].setup.ai) snd('turn');
+        if (Math.abs(duel.wind) > 1.5 && duel.level.wind.gust > 0) snd('wind', { volume: 0.6 });
+        break;
+      case 'timeout':
+        if (!quiet) this.toast(t('hud.timeout'));
+        break;
+      case 'over':
+        if (quiet) break;
+        this.overTimer = 1.8;
+        this.refreshWeapons();
+        break;
     }
-    useAd(this.save.meta, 'redo', this.today());
-    this.weakOrders.splice(this.weakOrders.indexOf(best.w), 1);
-    const e = best.extra;
-    this.p.coins += e.total;
-    this.p.gems += e.gems;
-    run.summary.base += e.paid;
-    run.summary.tips += e.tip;
-    run.summary.earned += e.total;
-    run.summary.gems += e.gems;
-    run.summary.perfect += 1;
-    this.save.stats.perfect += 1;
-    this.persist();
-    this.sfx('happy');
-    this.toast(t('redoDone'), icon.star(), this.chips({ coins: e.total, gems: e.gems }));
-    this.renderSummary();
   }
 
-  /** Midgame ads only at the transition to the next day (never on a navigation button). */
-  private async goNextDay(): Promise<void> {
-    const completed = this.p.day - 1;
-    this.o.root.querySelectorAll<HTMLButtonElement>('.menu button').forEach((b) => (b.disabled = true));
-    if (midgameAllowed(completed, this.throttle)) {
-      this.gameplay.stop();
-      await this.o.platform.midgame();
+  private duelTick(dt: number): void {
+    const duel = this.duel;
+    if (!duel) return;
+    this.updateHud();
+    if (duel.phase === 'over' && this.overTimer > 0 && !this.resultShown) {
+      this.overTimer -= dt;
+      if (this.overTimer <= 0) this.result();
+    }
+  }
+
+  // ───────────── pause / results ─────────────
+
+  pause(): void {
+    if (!this.duel || !this.session || this.session.attract || this.paused || this.resultShown) return;
+    this.paused = true;
+    this.drag = null;
+    this.duel.cancelAim();
+    this.tracker.stop();
+    const s = this.session;
+    this.show(
+      h('div.screen.dim', {},
+        h('div.card.pausecard', {},
+          h('h2', {}, t('pause.title')),
+          this.btn(t('pause.resume'), () => this.resume(), 'primary big', { id: 'resume' }),
+          this.btn(t('pause.restart'), () => {
+            this.paused = false;
+            if (s.mode === 'endless') this.endlessStart();
+            else this.restartLevel();
+          }),
+          this.toggleRow('settings.sound', 'sound'),
+          this.toggleRow('settings.music', 'music'),
+          this.btn(t('pause.quit'), () => {
+            this.paused = false;
+            if (s.mode === 'adventure') this.map(s.world);
+            else this.title();
+          }),
+        ),
+      ),
+    );
+  }
+
+  resume(): void {
+    if (!this.paused) return;
+    this.paused = false;
+    this.show();
+    this.last = performance.now();
+    if (this.duel && this.duel.phase !== 'over') this.tracker.start();
+  }
+
+  private restartLevel(): void {
+    const s = this.session;
+    if (!s) return;
+    s.revived = false;
+    s.tryWeapon = null;
+    this.prepareDuel();
+    this.showIntro();
+  }
+
+  private async rewarded(): Promise<boolean> {
+    this.tracker.stop();
+    let ok: boolean;
+    try {
+      ok = await this.platform.rewarded();
+    } catch {
+      ok = false;
+    }
+    if (!ok) this.flash(t('result.adFail'), 'info', 1800);
+    return ok;
+  }
+
+  /** Natural break: a midgame ad (throttled) before continuing. */
+  private async breakThen(next: () => void): Promise<void> {
+    this.tracker.stop();
+    if (this.throttle.canShow()) {
       this.throttle.markShown();
+      try {
+        await this.platform.midgame();
+      } catch {
+        /* the game always continues */
+      }
     }
-    this.leaveSummary(() => void this.startDay());
-  }
-
-  private leaveSummary(next: () => void): void {
-    this.challenge = false;
-    this.challengeResult = null;
     next();
   }
 
-  // ------------------------------------------------------------------ shop
-
-  private renderShop(): void {
-    clearInterval(this.ticker);
-    const tabs: ShopTab[] = ['recipes', 'equipment', 'decor', 'cafe'];
-    const tabIcon: Record<ShopTab, string> = { recipes: icon.recipes(), equipment: icon.equipment(), decor: icon.decor(), cafe: icon.hammer() };
-    this.o.root.innerHTML = `
-      <div class="screen shop-screen">
-        <header class="hud"><button class="icon-btn" id="back" aria-label="${esc(t('back'))}">${icon.back()}</button><h2 class="hud-title">${esc(t('shop'))}</h2>${this.coinPill()}${this.gemPill()}</header>
-        <div class="tabs four" role="tablist">
-          ${tabs.map((k) => `<button role="tab" class="tab ${k === this.shopTab ? 'on' : ''}" aria-selected="${k === this.shopTab}" data-tab="${k}">${tabIcon[k]}<span>${esc(t(k))}</span></button>`).join('')}
-        </div>
-        ${this.shopTab === 'decor' || this.shopTab === 'cafe' ? `<div class="decor-preview">${cafeBackground(this.features())}<div class="counter-wrap">${counter(this.p.decor)}</div></div>` : ''}
-        ${this.adNote()}
-        <div class="cards">${this.shopCards()}</div>
-      </div>`;
-    $('#back', this.o.root)?.addEventListener('click', () => {
-      this.sfx('tap');
-      this.shopReturn();
-    });
-    this.o.root.querySelectorAll<HTMLElement>('[data-tab]').forEach((b) =>
-      b.addEventListener('click', () => {
-        this.shopTab = (b.dataset.tab as ShopTab) ?? 'recipes';
-        this.sfx('tap');
-        this.renderShop();
-      }),
-    );
-    this.o.root.querySelectorAll<HTMLButtonElement>('[data-buy]').forEach((b) => b.addEventListener('click', () => void this.buy(b)));
-    if (this.shopTab === 'cafe' && Object.values(this.save.meta.built).some((at) => at > Date.now())) {
-      this.ticker = window.setInterval(() => {
-        if (!$('.shop-screen', this.o.root)) return clearInterval(this.ticker);
-        this.o.root.querySelectorAll<HTMLElement>('[data-left]').forEach((el) => {
-          const left = Number(el.dataset.left) - Date.now();
-          el.textContent = fmtTime(left);
-          if (left <= 0) {
-            clearInterval(this.ticker);
-            void this.showRewards(settleBuilds(this.save.meta, this.p, Date.now())).then(() => {
-              this.persist();
-              if ($('.shop-screen', this.o.root)) this.renderShop();
-            });
-          }
+  private result(): void {
+    const duel = this.duel;
+    const s = this.session;
+    if (!duel || !s) return;
+    this.resultShown = true;
+    this.tracker.stop();
+    this.hud.classList.add('hidden');
+    const won = duel.winner === 0;
+    if (s.mode === 'versus') return this.versusResult();
+    if (s.mode === 'endless') return this.endlessResult(won);
+    const me = duel.fighters[0];
+    const L = s.L;
+    const stars = starsFor(won, me.hp, me.maxHp, me.shots, L.par);
+    const replay = starsOf(this.save, s.world, s.level) > 0;
+    const coins = coinsFor(s.world, s.level, stars, L.boss, replay);
+    const res = recordLevel(this.save, s.world, s.level, stars, coins);
+    this.persist();
+    if (won && L.boss) this.platform.happytime();
+    audio.play(won ? 'win' : 'lose');
+    const starsEl = h('div.bigstars', {}, ...[1, 2, 3].map((i) => h(`i${i <= stars ? '.on' : ''}`, { style: `animation-delay:${0.25 + i * 0.3}s` })));
+    if (won) for (let i = 0; i < stars; i++) window.setTimeout(() => audio.play('star', { index: i }), 550 + i * 300);
+    const coinLine = h('div.coinline', {}, h('span.coin'), t('result.coins', { n: coins }));
+    let doubled = false;
+    const buttons = h('div.row', {});
+    if (won) {
+      const nextLevel = s.level < LEVELS_PER_WORLD ? s.level + 1 : null;
+      buttons.append(
+        this.btn(t('result.map'), () => this.breakThen(() => this.map(s.world)), '', { id: 'to-map' }),
+        this.btn(t('result.retry'), () => this.breakThen(() => this.restartLevel()), '', { id: 'retry' }),
+        nextLevel
+          ? this.btn(t('result.next'), () => this.breakThen(() => this.intro(s.world, nextLevel)), 'primary', { id: 'next' })
+          : this.btn(t('result.next'), () => this.breakThen(() => this.map(Math.min(WORLDS.length, s.world + 1))), 'primary', { id: 'next' }),
+      );
+    } else {
+      buttons.append(
+        this.btn(t('result.map'), () => this.breakThen(() => this.map(s.world)), '', { id: 'to-map' }),
+        this.btn(t('result.retry'), () => this.breakThen(() => this.restartLevel()), 'primary', { id: 'retry' }),
+      );
+    }
+    const extras = h('div.extras', {});
+    if (won && coins > 0 && this.platform.adsUnavailable() === null) {
+      const dbl = this.btn(`▶ ${t('result.double')}`, () => {
+        if (doubled) return;
+        void this.rewarded().then((ok) => {
+          if (!ok || doubled) return;
+          doubled = true;
+          this.save.coins += coins;
+          this.persist();
+          coinLine.lastChild!.textContent = t('result.coins', { n: coins * 2 });
+          dbl.remove();
+          audio.play('coin');
+          this.flash(t('result.doubled'), 'info');
+          this.refreshCoins();
         });
-      }, 1000);
+      }, 'ad', { id: 'double' });
+      extras.append(dbl);
     }
+    if (!won && L.boss && !s.revived && this.platform.adsUnavailable() === null) {
+      extras.append(this.btn(`▶ ${t('result.revive')}`, () => {
+        void this.rewarded().then((ok) => {
+          if (!ok) return;
+          s.revived = true;
+          this.show();
+          this.resultShown = false;
+          duel.revive(0);
+          this.hud.classList.remove('hidden');
+          this.updateHud();
+          this.refreshWeapons();
+          this.tracker.start();
+        });
+      }, 'ad', { id: 'revive' }));
+    }
+    this.show(
+      h('div.screen.dim', {},
+        h(`div.card.result${won ? '.won' : '.lost'}`, {},
+          h('h2', {}, won ? t('result.win') : t('result.lose')),
+          starsEl,
+          h('div.stats', {}, h('span', {}, t('result.hp', { n: me.hp })), h('span', {}, t('result.shots', { n: me.shots, p: L.par }))),
+          coinLine,
+          res.unlockedWorld ? h('div.unlocked', {}, t('result.unlocked', { w: t(`world.${worldByIndex(res.unlockedWorld).id}` as Key) })) : null,
+          extras,
+          buttons,
+        ),
+      ),
+    );
   }
 
-  private priceButton(kind: string, id: string, cost: number, affordable: boolean, currency: 'coin' | 'gem' = 'coin'): string {
-    return `<button class="buy ${affordable ? '' : 'short'} ${currency}" data-buy="${kind}" data-id="${id}" ${affordable ? '' : 'disabled'}>${currency === 'gem' ? icon.gem() : icon.coin()}<span>${cost}</span></button>`;
+  private refreshCoins(): void {
+    for (const el of Array.from(this.layer.querySelectorAll('.coins'))) el.lastChild!.textContent = String(this.save.coins);
   }
 
-  private shopCards(): string {
-    const p = this.p;
-    const meta = this.save.meta;
-    const now = Date.now();
-    if (this.shopTab === 'recipes') {
-      const next = nextLockedRecipe(p);
-      const canAd = canUseAd(meta, 'unlock', this.today());
-      const sorted = [...RECIPES].sort((a, b) => Number(p.recipes.includes(a.id)) - Number(p.recipes.includes(b.id)) || a.level - b.level);
-      return sorted
-        .map((r) => {
-          const st = recipeStatus(p, r.id);
-          let action: string;
-          if (st === 'owned') action = `<span class="badge-owned">${icon.check()}</span>`;
-          else {
-            const gems = recipeGemCost(r.id);
-            action = `<span class="badge-locked">${icon.lock()}<span>${esc(t('level', { n: r.level }))}</span></span>` + this.priceButton('recipe', r.id, gems, p.gems >= gems, 'gem');
-            if (r.id === next && canAd && this.videosOk()) action += `<button class="buy video" data-buy="recipe-ad" data-id="${r.id}">${icon.video()}<span>${esc(t('unlockNow'))}</span></button>`;
-          }
-          return `<div class="card ${st}" data-recipe="${r.id}"><div class="card-pic">${recipeIcon(r.steps)}</div><div class="card-name">${esc(name('recipes', r.id))}</div><div class="card-action">${action}</div></div>`;
-        })
-        .join('');
-    }
-    if (this.shopTab === 'equipment') {
-      return MACHINES.map((m) => {
-        const lvl = p.equipment[m];
-        const cost = equipmentCost(p, m);
-        const needed = machineNeeded(p, m);
-        const dots = Array.from({ length: MAX_EQUIPMENT_LEVEL + 1 }, (_, i) => `<i class="${i <= lvl ? 'on' : ''}"></i>`).join('');
-        let action: string;
-        if (cost === null) action = `<span class="badge-owned">${esc(t('maxLevel'))}</span>`;
-        else if (!needed) action = `<span class="badge-locked">${icon.lock()}</span>`;
-        else action = this.priceButton('machine', m, cost, p.coins >= cost);
-        return `<div class="card"><div class="card-pic">${machineIcon(m)}</div><div class="card-name">${esc(name('machines', m))}</div><div class="level" aria-label="${esc(t('level', { n: lvl + 1 }))}">${dots}<span class="speed">» ${(machineDuration(lvl) / 1000).toFixed(1)}s</span></div><div class="card-action">${action}</div></div>`;
-      }).join('');
-    }
-    if (this.shopTab === 'decor') {
-      return DECOR.map((d) => {
-        const owned = p.decor.includes(d.id);
-        const action = owned
-          ? `<span class="badge-owned">${icon.check()}</span>`
-          : d.gems
-            ? this.priceButton('decor', d.id, d.gems, p.gems >= d.gems, 'gem')
-            : this.priceButton('decor', d.id, d.cost, p.coins >= d.cost);
-        return `<div class="card ${owned ? 'owned' : ''} ${d.gems ? 'premium' : ''}"><div class="card-pic decor-pic">${decorIcon(d.id)}</div><div class="card-name">${esc(name('decor', d.id))}</div><div class="card-action">${action}</div></div>`;
-      }).join('');
-    }
-    return EXPANSIONS.map((e) => {
-      const st = expansionStatus(meta, p, e.id, now);
-      const info = e.staff ? name('expansionInfo', 'staff') : e.theme ? name('expansionInfo', 'theme') : e.guests ? name('expansionInfo', 'guests') : e.tip ? name('expansionInfo', 'tip').replace('{n}', String(Math.round(e.tip * 100))) : e.stations ? name('expansionInfo', 'stations') : name('expansionInfo', 'counter');
-      let action: string;
-      if (st === 'built') action = `<span class="badge-owned">${icon.check()}</span>`;
-      else if (st === 'building') {
-        const at = meta.built[e.id] ?? now;
-        const gems = skipCost(meta, e.id, now);
-        action = `<span class="build-timer">${icon.timer()}<span data-left="${at}">${fmtTime(at - now)}</span></span>
-          ${this.videosOk() ? `<button class="buy video" data-buy="finish-ad" data-id="${e.id}">${icon.video()}<span>${esc(t('finishNow'))}</span></button>` : ''}
-          ${this.priceButton('finish-gems', e.id, gems, p.gems >= gems, 'gem')}`;
-      } else if (st === 'locked') {
-        action =
-          meta.level < e.level
-            ? `<span class="badge-locked">${icon.lock()}<span>${esc(t('level', { n: e.level }))}</span></span>`
-            : `<span class="badge-locked">${icon.lock()}<span>${esc(t('needs', { name: name('expansions', e.requires ?? '') }))}</span></span>`;
-      } else {
-        const prices = [e.coins ? `${icon.coin()}<span>${e.coins}</span>` : '', e.gems ? `${icon.gem()}<span>${e.gems}</span>` : ''].join('');
-        action = `<button class="buy ${st === 'buyable' ? '' : 'short'}" data-buy="build" data-id="${e.id}" ${st === 'buyable' ? '' : 'disabled'}>${prices}${e.minutes ? `<small>${icon.timer()}${e.minutes}′</small>` : ''}</button>`;
-      }
-      return `<div class="card ${st}" data-expansion="${e.id}"><div class="card-pic decor-pic">${expansionIcon(e.id)}</div><div class="card-name">${esc(name('expansions', e.id))}</div><div class="card-info">${esc(info)}</div><div class="card-action">${action}</div></div>`;
-    }).join('');
+  // ───────────── 2 players ─────────────
+
+  versusSetup(): void {
+    if (!this.session?.attract || this.session.world !== this.versusWorld) this.attract(this.versusWorld);
+    const grid = h('div.worldgrid', {}, ...WORLDS.map((w) =>
+      h<'button'>(`button.worldbtn.w-${w.id}${this.versusWorld === w.index ? '.on' : ''}`, {
+        'data-world': w.index,
+        onclick: () => {
+          audio.play('click');
+          this.versusWorld = w.index;
+          this.versusSetup();
+        },
+      }, t(`world.${w.id}` as Key)),
+    ));
+    this.show(
+      h('div.screen.setup', {},
+        h('div.topbar', {}, this.btn('‹ ' + t('common.back'), () => this.title(), 'small'), h('span')),
+        h('div.card', {},
+          h('h2', {}, t('versus.title')),
+          h('p.sub', {}, t('versus.hint')),
+          h('div.label', {}, t('versus.pick')),
+          grid,
+          this.btn(t('versus.start'), () => this.versusStart(), 'primary big', { id: 'versus-start' }),
+        ),
+      ),
+    );
   }
 
-  private async buy(b: HTMLButtonElement): Promise<void> {
-    const kind = b.dataset.buy;
-    const id = b.dataset.id ?? '';
-    const p = this.p;
-    const meta = this.save.meta;
-    const now = Date.now();
-    let ok = false;
-    if (kind === 'recipe') {
-      ok = buyRecipeWithGems(p, id);
-      if (ok) {
-        this.preferNext = id;
-        this.celebrateRecipe(id);
-      }
-    } else if (kind === 'recipe-ad') {
-      b.disabled = true;
-      if (await this.watchVideo()) {
-        useAd(meta, 'unlock', this.today());
-        ok = grantRecipe(p, id);
-        if (ok) {
-          this.preferNext = id;
-          this.celebrateRecipe(id);
-        }
-      }
-    } else if (kind === 'machine') {
-      ok = isMachine(id) && buyEquipment(p, id);
-    } else if (kind === 'decor') {
-      ok = buyDecor(p, id);
-    } else if (kind === 'build') {
-      ok = startBuild(meta, p, id, now);
-    } else if (kind === 'finish-ad') {
-      b.disabled = true;
-      if (await this.watchVideo()) ok = finishBuild(meta, p, id, Date.now(), false);
-    } else if (kind === 'finish-gems') {
-      ok = finishBuild(meta, p, id, now, true);
-    }
-    if (ok) {
-      if (kind !== 'recipe' && kind !== 'recipe-ad') {
-        this.sfx('unlock');
-        this.buzz(20);
-      }
-      const events = settleBuilds(meta, p, Date.now());
+  private versusStart(): void {
+    const level = 5;
+    const L = generateLevel(this.versusWorld, level, { seed: Math.floor(Math.random() * 1e9), forceBoss: false });
+    this.session = { mode: 'versus', world: this.versusWorld, level, L, tryWeapon: null, revived: false, wave: 0, endlessHp: 100, attract: false };
+    this.prepareDuel();
+    this.showIntro();
+  }
+
+  private versusResult(): void {
+    const duel = this.duel;
+    if (!duel) return;
+    audio.play('win');
+    this.show(
+      h('div.screen.dim', {},
+        h('div.card.result.won', {},
+          h('h2', {}, duel.winner === 0 ? t('result.p1wins') : t('result.p2wins')),
+          h('img.portrait.big', { src: this.portrait(duel.fighters[duel.winner ?? 0]), alt: '' }),
+          h('div.row', {},
+            this.btn(t('result.menu'), () => this.breakThen(() => this.title()), '', { id: 'to-menu' }),
+            this.btn(t('result.rematch'), () => this.breakThen(() => this.versusStart()), 'primary', { id: 'rematch' }),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ───────────── endless ─────────────
+
+  endlessSetup(): void {
+    this.show(
+      h('div.screen.setup', {},
+        h('div.topbar', {}, this.btn('‹ ' + t('common.back'), () => this.title(), 'small'), this.coinsBadge()),
+        h('div.card', {},
+          h('h2', {}, t('endless.title')),
+          h('p.sub', {}, t('endless.hint')),
+          h('div.best', {}, t('result.best', { n: this.save.endlessBest })),
+          this.btn(t('endless.start'), () => this.endlessStart(), 'primary big', { id: 'endless-start' }),
+        ),
+      ),
+    );
+  }
+
+  private endlessStart(): void {
+    this.session = null;
+    this.endlessWave(0, 100);
+  }
+
+  private endlessWave(wave: number, hp: number): void {
+    const rng = new Rng(Date.now() + wave);
+    const world = 1 + rng.int(0, furthestWorld(this.save) - 1);
+    const level = clamp(2 + Math.floor(wave * 0.8), 2, 9);
+    const L = generateLevel(world, level, { seed: rng.int(1, 1e9), forceBoss: false });
+    this.session = { mode: 'endless', world, level, L, tryWeapon: null, revived: false, wave, endlessHp: hp, attract: false };
+    this.prepareDuel();
+    this.showIntro();
+  }
+
+  private endlessResult(won: boolean): void {
+    const duel = this.duel;
+    const s = this.session;
+    if (!duel || !s) return;
+    const me = duel.fighters[0];
+    if (won) {
+      const coins = 5 + s.wave * 2;
+      this.save.coins += coins;
+      this.save.endlessBest = Math.max(this.save.endlessBest, s.wave + 1);
       this.persist();
-      this.renderShop();
-      await this.showRewards(events);
+      audio.play('win');
+      const hp = Math.min(me.maxHp, me.hp + 25);
+      this.show(
+        h('div.screen.dim', {},
+          h('div.card.result.won', {},
+            h('h2', {}, t('result.win')),
+            h('div.stats', {}, h('span', {}, t('result.waves', { n: s.wave + 1 })), h('span', {}, `❤ ${hp}`)),
+            h('div.coinline', {}, h('span.coin'), t('result.coins', { n: coins })),
+            h('div.row', {},
+              this.btn(t('result.menu'), () => this.breakThen(() => this.title()), '', { id: 'to-menu' }),
+              this.btn(t('result.continue'), () => this.breakThen(() => this.endlessWave(s.wave + 1, hp)), 'primary', { id: 'next' }),
+            ),
+          ),
+        ),
+      );
       return;
     }
-    if (kind !== 'recipe-ad' && kind !== 'finish-ad') this.sfx('oops');
-    if (b.isConnected) b.disabled = false;
-  }
-
-  private celebrateRecipe(id: string): void {
-    this.o.platform.happytime();
-    this.sfx('unlock');
-    this.buzz([20, 40, 20]);
-    this.toast(`${t('newRecipe')} ${name('recipes', id)}`, recipeIcon(getRecipe(id).steps));
-  }
-
-  // ------------------------------------------------------------------ book (stickers & achievements)
-
-  private renderBook(): void {
-    clearInterval(this.ticker);
-    const meta = this.save.meta;
-    const body =
-      this.bookTab === 'stickers'
-        ? `<div class="stickers">${STICKERS.map((id) => {
-            const n = meta.stickers[id] ?? 0;
-            return `<div class="sticker ${n ? 'got' : 'missing'}" data-sticker="${id}"><div class="sticker-pic">${this.guestPic(id)}</div><b>${esc(n ? name('guests', id) : '?')}</b><small>${n ? `×${n}` : esc(t('level', { n: CUSTOMER_LEVEL[id] }))}</small></div>`;
-          }).join('')}</div>`
-        : `<div class="achievements">${ACHIEVEMENTS.map((a) => {
-            const done = meta.achievements.includes(a.id);
-            const v = Math.min(a.goal, a.value(meta, this.p));
-            return `<div class="achievement ${done ? 'done' : ''}" data-achievement="${a.id}"><div class="a-pic">${icon.trophy()}</div><div class="m-body"><div class="m-text">${esc(name('achievements', a.id))}</div><div class="bar"><i style="width:${Math.round((v / a.goal) * 100)}%"></i><span>${v}/${a.goal}</span></div></div><div class="m-reward">${done ? `<span class="badge-owned">${icon.check()}</span>` : this.chips({ gems: a.gems })}</div></div>`;
-          }).join('')}</div>`;
-    this.o.root.innerHTML = `
-      <div class="screen book-screen">
-        <header class="hud"><button class="icon-btn" id="back" aria-label="${esc(t('back'))}">${icon.back()}</button><h2 class="hud-title">${esc(t('book'))}</h2>${this.gemPill()}</header>
-        <div class="tabs" role="tablist">
-          <button role="tab" class="tab ${this.bookTab === 'stickers' ? 'on' : ''}" data-book="stickers">${icon.book()}<span>${esc(t('stickers'))}</span></button>
-          <button role="tab" class="tab ${this.bookTab === 'achievements' ? 'on' : ''}" data-book="achievements">${icon.trophy()}<span>${esc(t('achievements'))}</span></button>
-        </div>
-        ${body}
-      </div>`;
-    $('#back', this.o.root)?.addEventListener('click', () => this.renderHub());
-    this.o.root.querySelectorAll<HTMLElement>('[data-book]').forEach((b) =>
-      b.addEventListener('click', () => {
-        this.bookTab = (b.dataset.book as BookTab) ?? 'stickers';
-        this.renderBook();
-      }),
+    const score = s.wave;
+    const best = score >= this.save.endlessBest && score > 0;
+    this.save.endlessBest = Math.max(this.save.endlessBest, score);
+    this.persist();
+    audio.play('lose');
+    this.show(
+      h('div.screen.dim', {},
+        h('div.card.result.lost', {},
+          h('h2', {}, t('result.lose')),
+          h('div.stats', {}, h('span', {}, t('result.waves', { n: score })), h('span', {}, best ? t('result.newBest') : t('result.best', { n: this.save.endlessBest }))),
+          h('div.row', {},
+            this.btn(t('result.menu'), () => this.breakThen(() => this.title()), '', { id: 'to-menu' }),
+            this.btn(t('result.retry'), () => this.breakThen(() => this.endlessStart()), 'primary', { id: 'retry' }),
+          ),
+        ),
+      ),
     );
   }
+
+  // ───────────── shop & settings ─────────────
+
+  shop(tab: ShopItem['type']): void {
+    const items: ShopItem[] =
+      tab === 'weapon' ? PLAYER_WEAPONS.map((id) => ({ type: 'weapon', id })) : tab === 'hat' ? HATS.map((id) => ({ type: 'hat', id })) : COLORS.map((id) => ({ type: 'color', id }));
+    const grid = h('div.shopgrid', {});
+    for (const it of items) {
+      const own = owns(this.save, it);
+      const locked = itemLocked(this.save, it);
+      const price = priceOf(it);
+      const equipped =
+        (it.type === 'weapon' && this.save.equipped.weapon === it.id) || (it.type === 'hat' && this.save.equipped.hat === it.id) || (it.type === 'color' && this.save.equipped.color === it.id);
+      const name = it.type === 'weapon' ? t(`weapon.${it.id}` as Key) : it.type === 'hat' ? t(`hat.${it.id}` as Key) : t(`color.${it.id}` as Key);
+      const img =
+        it.type === 'weapon'
+          ? (this.icons.get(it.id) ?? '')
+          : fighterPortrait({ look: 'hero', hat: it.type === 'hat' ? it.id : this.save.equipped.hat, color: it.type === 'color' ? it.id : this.save.equipped.color, weapons: [], weapon: 'bow', hp: 1, ai: false }, 88);
+      let action: HTMLElement;
+      if (equipped) action = h('span.tag.eq', {}, t('shop.equipped'));
+      else if (own)
+        action = this.btn(t('shop.equip'), () => {
+          equip(this.save, it);
+          this.persist();
+          this.shop(tab);
+        }, 'small');
+      else if (locked) action = h('span.tag.lock', {}, t('shop.requires', { n: it.type === 'weapon' ? WEAPONS[it.id].requires : 0 }));
+      else
+        action = this.btn(`${price}`, () => {
+          if (buy(this.save, it)) {
+            audio.play('coin');
+            this.persist();
+            this.shop(tab);
+          }
+        }, `small buy${this.save.coins < price ? ' poor' : ''}`, { 'data-buy': it.id });
+      grid.append(
+        h(`div.item${equipped ? '.equipped' : ''}${!own && locked ? '.locked' : ''}`, {},
+          h('img', { src: img, alt: '' }),
+          h('b', {}, name),
+          it.type === 'weapon' ? h('small', {}, t(`wdesc.${it.id}` as Key)) : null,
+          action,
+        ),
+      );
+    }
+    const tabBtn = (ty: ShopItem['type'], key: Key) =>
+      h<'button'>(`button.tab.wide${tab === ty ? '.on' : ''}`, { onclick: () => { audio.play('click'); this.shop(ty); } }, t(key));
+    this.show(
+      h('div.screen.shop', {},
+        h('div.topbar', {}, this.btn('‹ ' + t('common.back'), () => this.title(), 'small'), this.coinsBadge()),
+        h('div.card.shopcard', {},
+          h('h2', {}, t('shop.title')),
+          h('div.tabs', {}, tabBtn('weapon', 'shop.weapons'), tabBtn('hat', 'shop.hats'), tabBtn('color', 'shop.colors')),
+          grid,
+        ),
+      ),
+    );
+    void HAT_PRICE;
+    void COLOR_PRICE;
+  }
+
+  private toggleRow(key: Key, field: 'sound' | 'music'): HTMLElement {
+    const on = this.save.settings[field];
+    const b = h<'button'>(`button.toggle${on ? '.on' : ''}`, {
+      'data-setting': field,
+      onclick: () => {
+        audio.unlock();
+        this.save.settings[field] = !this.save.settings[field];
+        this.persist();
+        this.applyAudio();
+        audio.play('click');
+        b.classList.toggle('on', this.save.settings[field]);
+        b.textContent = this.save.settings[field] ? t('settings.on') : t('settings.off');
+      },
+    }, on ? t('settings.on') : t('settings.off'));
+    return h('div.setrow', {}, h('span', {}, t(key)), b);
+  }
+
+  settings(back: () => void): void {
+    const langs: Array<['auto' | 'en' | 'fr', string]> = [['auto', t('settings.auto')], ['en', 'English'], ['fr', 'Français']];
+    this.show(
+      h('div.screen.setup', {},
+        h('div.topbar', {}, this.btn('‹ ' + t('common.back'), back, 'small'), h('span')),
+        h('div.card.settings', {},
+          h('h2', {}, t('settings.title')),
+          this.toggleRow('settings.sound', 'sound'),
+          this.toggleRow('settings.music', 'music'),
+          h('div.setrow', {}, h('span', {}, t('settings.lang')),
+            h('div.seg', {}, ...langs.map(([code, label]) =>
+              h<'button'>(`button${this.save.settings.lang === code ? '.on' : ''}`, {
+                'data-lang': code,
+                onclick: () => {
+                  audio.play('click');
+                  this.save.settings.lang = code;
+                  this.persist();
+                  this.applySettings();
+                  this.settings(back);
+                },
+              }, label),
+            )),
+          ),
+          h('p.credits', {}, `Stick Duel · ${getLang().toUpperCase()}`),
+        ),
+      ),
+    );
+  }
+
+  // ───────────── automation helpers (tests, screenshots, recordings) ─────────────
+
+  /**
+   * Cover art from a real duel: the hero's arrow is about to hit the boss, who is
+   * drawing his own weapon. Freezes on that frame with the HUD hidden and the title shown.
+   */
+  async coverShot(world: number, level: number, title: 'landscape' | 'portrait' | 'square' | 'none'): Promise<void> {
+    this.intro(world, level);
+    this.fight();
+    this.hud.classList.add('hidden');
+    this.banner.className = 'banner';
+    this.banner.style.display = 'none';
+    const duel = this.duel as Duel;
+    const scene = this.scene as SceneRenderer;
+    scene.clean = true;
+    const [hero, boss] = duel.fighters;
+    // a few earlier hits make the boss look battle-worn
+    boss.hp = Math.round(boss.maxHp * 0.35);
+    hero.hp = 64;
+    const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    await wait(400);
+    duel.wind = 0;
+    this.autoFire(true);
+    boss.aim = { angle: boss.restAngle() - 0.15, power: 0.85 };
+    boss.showAim = true;
+    // freeze just before impact
+    for (let i = 0; i < 400; i++) {
+      const p = duel.projectiles[0];
+      if (!p) break;
+      const hp = boss.rag.head.getPosition();
+      if (Math.hypot(p.f.x - hp.x, p.f.y - hp.y) < 2.2 * boss.rag.scale) break;
+      await wait(16);
+    }
+    this.freeze = true;
+    hero.aim = { angle: hero.restAngle() - 0.1, power: 0.15 };
+    hero.showAim = true;
+    // tighter, more dramatic framing than the gameplay camera
+    const cam = scene.cam;
+    const hh = hero.rag.head.getPosition();
+    const bh = boss.rag.head.getPosition();
+    const v = this.view;
+    if (title === 'landscape' || title === 'none') {
+      const spanX = Math.abs(bh.x - hh.x) + 4.2;
+      cam.zoom = v.w / spanX;
+      cam.x = (hh.x + bh.x) / 2;
+      cam.y = (hh.y + bh.y) / 2 + 0.4 * (v.h / cam.zoom / 12);
+    } else {
+      // narrow formats: close on the boss with the arrow flying in
+      const spanX = title === 'portrait' ? 7.5 : 8.5;
+      cam.zoom = v.w / spanX;
+      cam.x = bh.x - spanX * 0.2;
+      cam.y = bh.y + (title === 'portrait' ? 2.2 : 1.6);
+    }
+    clear(this.layer);
+    if (title !== 'none') this.layer.append(h(`div.covertitle.ct-${title}`, {}, h('div.logo', {}, h('span.l1', {}, 'Stick'), h('span.l2', {}, 'Duel'))));
+    await wait(100);
+  }
+
+  /** Like a player: pulls back over ~0.7 s (aim preview + power arc visible), then releases. */
+  async demoShot(head = false, weapon?: WeaponId): Promise<boolean> {
+    const d = this.duel;
+    if (!d?.humanAiming) return false;
+    if (weapon) d.selectWeapon(weapon);
+    this.refreshWeapons();
+    const s = d.autoShot(head);
+    if (!s) return false;
+    const f = d.current;
+    const t0 = performance.now();
+    await new Promise<void>((done) => {
+      const step = () => {
+        const k = Math.min(1, (performance.now() - t0) / 750);
+        const e = 1 - (1 - k) * (1 - k);
+        d.setAim(f.restAngle() + (s.angle - f.restAngle()) * Math.min(1, e * 1.3), s.power * e);
+        if (k < 1) requestAnimationFrame(step);
+        else done();
+      };
+      step();
+    });
+    d.setAim(s.angle, s.power);
+    return d.fire();
+  }
+
+  /** Fires a perfect shot for the human whose turn it is. */
+  autoFire(head = false, power = 1): boolean {
+    const d = this.duel;
+    if (!d?.humanAiming) return false;
+    const s = d.autoShot(head);
+    if (!s) return false;
+    d.setAim(s.angle, s.power * power);
+    return d.fire();
+  }
 }
 
-function missionIcon(kind: Mission['kind']): string {
-  if (kind === 'vip') return icon.crown();
-  if (kind === 'perfect' || kind === 'perfect_streak' || kind === 'stars') return icon.star();
-  if (kind === 'earn_today') return icon.coin();
-  if (kind === 'large') return drawItem({ steps: ['cup', 'coffee', 'milk', 'foam'], size: 'L' });
-  if (kind === 'combo') return recipeIcon(getRecipe('croissant').steps);
-  return icon.guest();
+/** Dashed trail linking the level nodes in order (drawn behind them). */
+function drawPath(path: HTMLElement): void {
+  const box = path.getBoundingClientRect();
+  const pts = Array.from(path.querySelectorAll<HTMLElement>('.node'))
+    .sort((a, b) => Number(a.dataset.level) - Number(b.dataset.level))
+    .map((n) => {
+      const r = n.getBoundingClientRect();
+      return `${(r.left + r.width / 2 - box.left).toFixed(1)},${(r.top + r.height / 2 - box.top).toFixed(1)}`;
+    });
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('class', 'trail');
+  svg.setAttribute('width', String(box.width));
+  svg.setAttribute('height', String(box.height));
+  for (const [cls, w] of [['trail-bg', 12], ['trail-fg', 5]] as const) {
+    const pl = document.createElementNS(ns, 'polyline');
+    pl.setAttribute('points', pts.join(' '));
+    pl.setAttribute('class', cls);
+    pl.setAttribute('stroke-width', String(w));
+    svg.append(pl);
+  }
+  path.prepend(svg);
 }
 
-function hit(el: HTMLElement, x: number, y: number): boolean {
-  const r = el.getBoundingClientRect();
-  return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+function windLabel(v: number): string {
+  return `${v < 0 ? '←' : '→'} ${Math.round(Math.abs(v) * 5)}`;
 }
 
-function pourColor(id: string): string {
-  const c: Record<string, string> = {
-    milk: '#f4ead8', foam: '#fffaf2', cocoa: '#5a3420', orange: '#ffa630', yogurt: '#fff6ea', batter: '#f8e8b8', choco: '#5a3420', coffee: '#6b3e26',
-  };
-  return c[id] ?? '#fff';
+/** A small standing fighter rendered to an image (HUD, intro, shop). */
+const portraitCache = new Map<string, string>();
+export function fighterPortrait(setup: FighterSetup, px: number): string {
+  const key = `${setup.look}|${setup.hat}|${setup.color}|${setup.boss ? 1 : 0}|${px}`;
+  const hit = portraitCache.get(key);
+  if (hit) return hit;
+  const dpr = Math.min(MAX_DPR, window.devicePixelRatio || 1);
+  const c = document.createElement('canvas');
+  c.width = c.height = Math.round(px * dpr);
+  const ctx = c.getContext('2d') as CanvasRenderingContext2D;
+  const world = new World({ gravity: { x: 0, y: 0 } });
+  const rag = new Ragdoll(world, 0, 0, 1, 1, -1);
+  const f = new Fighter(0, { ...setup, scale: 1, weapon: 'bow' }, rag);
+  f.weapon = setup.look === 'hero' || setup.look === 'hero2' ? 'bow' : 'axe';
+  // head-and-shoulders crop: ragdoll feet at y = 0, head centre at about -1.73 m
+  const z = c.height * 1.05;
+  ctx.setTransform(z, 0, 0, z, c.width / 2, c.height * 0.5 + 1.73 * z);
+  drawFighter(ctx, f, 2.2 / z, 0, false);
+  const url = c.toDataURL();
+  portraitCache.set(key, url);
+  return url;
 }
+
+export type { HatId, ColorId };

@@ -1,5 +1,5 @@
 import { evaluate } from '../core/ai';
-import { beam, makeBlocker, rect, type Shape } from '../core/geometry';
+import { beam, makeBlocker, pointInPoly, rect, type Shape } from '../core/geometry';
 import { clamp, lerp, type Vec } from '../core/math';
 import { hashSeed, Rng } from '../core/rng';
 import { WEAPONS, type WeaponId } from '../core/weapons';
@@ -53,6 +53,23 @@ export interface Deco {
 
 export type FloorKind = 'forestfloor' | 'courtyard' | 'abyss' | 'sandplain' | 'lake' | 'lava';
 
+export type BonusKind = 'balloon' | 'crate' | 'bird';
+export type Reward = 'coins' | 'fire' | 'triple' | 'shield' | 'heal';
+
+/** A floating bonus between the fighters: hit it for coins or a one-shot power-up. */
+export interface BonusDef {
+  id: number;
+  kind: BonusKind;
+  /** Rest position; balloons/crates bob up and down, birds fly back and forth. */
+  x: number;
+  y: number;
+  reward: Reward;
+  coins: number;
+  /** Horizontal flight range (birds), metres. */
+  range: number;
+  phase: number;
+}
+
 export interface LevelDef {
   key: string;
   world: WorldDef;
@@ -82,6 +99,10 @@ export interface LevelDef {
   /** How long (seconds of flight) the dotted aim preview shows. */
   preview: number;
   friction: number;
+  /** Floating balloons / crates / birds to hit for coins or power-ups. */
+  bonuses: BonusDef[];
+  /** Falling off the platform is an instant K.O. (not on the gentle first levels). */
+  ringOut: boolean;
   /** World bounds used for "flew away" checks. */
   bounds: { minX: number; maxX: number; minY: number; maxY: number };
 }
@@ -112,7 +133,7 @@ export const TUNING: {
   /** Per-world AI skill offset. */
   worldSkill: [0.08, 0.06, -0.08, 0, -0.14, -0.16],
   /** Extra AI damage for each world's boss. */
-  bossDamage: [0.2, 0.1, 0.05, 0.95, -0.45, -0.2],
+  bossDamage: [-0.4, 0.1, 0.05, 0.95, -0.45, -0.2],
   /** Player (human) damage multiplier: sets the pace of the duels. */
   playerDamage: 1.5,
   /** Enemy HP: base + difficulty slope + within-world slope; bosses: base + per world. */
@@ -396,7 +417,7 @@ function volcano(b: Builder, L: Layout): void {
   L.floor = { y: floor, kind: 'lava' };
   const column = (cx: number, top: number, half: number) => {
     // centre chunk holds the fighter; the edges can crumble into the lava
-    const c = 1.25;
+    const c = 1.6;
     b.add(poly([
       { x: cx - c, y: top },
       { x: cx + c, y: top },
@@ -613,8 +634,44 @@ function buildLevel(worldIndex: number, level: number, seed: number, forceBoss?:
     par: Math.ceil(enemyHp / (WEAPONS.bow.damage * TUNING.playerDamage)) + 2,
     preview: lerp(TUNING.preview[0], TUNING.preview[1], T),
     friction: world.friction,
+    bonuses: makeBonuses(world, level, seed, enemy, b.solids, gentle),
+    ringOut: !gentle,
     bounds: { minX: minX - 30, maxX: maxX + 30, minY: -60, maxY: L.floor.y + 4 },
   };
+}
+
+const BONUS_KIND: Record<WorldDef['id'], BonusKind[]> = {
+  forest: ['bird', 'balloon'],
+  castle: ['crate', 'balloon'],
+  mountains: ['bird', 'balloon'],
+  desert: ['balloon', 'crate'],
+  snow: ['balloon', 'bird'],
+  volcano: ['crate', 'balloon'],
+};
+
+/** Some levels get 1–2 floating bonuses in the open air between the fighters. */
+function makeBonuses(world: WorldDef, level: number, seed: number, enemy: Vec, solids: Solid[], gentle: boolean): BonusDef[] {
+  // own random stream: adding bonuses never changes a level's layout
+  const rng = new Rng(seed ^ 0xb0b);
+  if (world.index === 1 && level <= 2) return [];
+  const n = gentle ? 1 : rng.chance(0.65) ? (rng.chance(0.35) ? 2 : 1) : 0;
+  const out: BonusDef[] = [];
+  const top = Math.min(0, enemy.y);
+  for (let i = 0; i < n * 6 && out.length < n; i++) {
+    const kind = gentle ? 'balloon' : rng.pick(BONUS_KIND[world.id]);
+    const x = lerp(enemy.x * 0.3, enemy.x * 0.7, rng.next());
+    const y = top - rng.range(2.4, 5.2);
+    // keep clear of scenery and of the other bonus
+    const clear = solids.every((s) => {
+      if (s.shape.kind === 'circle') return Math.hypot(s.shape.c.x - x, s.shape.c.y - y) > s.shape.r + 1.2;
+      return !s.shape.pts.some((q) => Math.hypot(q.x - x, q.y - y) < 1.4) && !pointInPoly(x, y, s.shape.pts);
+    });
+    if (!clear || out.some((o) => Math.abs(o.x - x) < 2.5)) continue;
+    const r = rng.next();
+    const reward: Reward = gentle ? 'coins' : r < 0.36 ? 'coins' : r < 0.52 ? 'fire' : r < 0.68 ? 'triple' : r < 0.84 ? 'shield' : 'heal';
+    out.push({ id: out.length, kind, x, y, reward, coins: reward === 'coins' ? 5 + Math.round(world.index * 3 + rng.range(0, 6)) : 0, range: kind === 'bird' ? rng.range(1.2, 2.2) : 0, phase: rng.range(0, 6.28) });
+  }
+  return out;
 }
 
 /** Endless mode: a random unlocked world, levels getting harder with each wave. */

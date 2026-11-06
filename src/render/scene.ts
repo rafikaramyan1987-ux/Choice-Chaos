@@ -77,6 +77,20 @@ export class Camera {
       this.init = true;
       return;
     }
+    // kill cam: follow the lethal shot, then the knocked-out fighter, zoomed in
+    const kc = duel.killCam;
+    if (kc) {
+      const victim = duel.fighters[kc.victim];
+      const proj = kc.proj && kc.proj.alive ? kc.proj : null;
+      const t = proj ? { x: proj.f.x, y: proj.f.y } : victim.center();
+      const fy = Math.min(t.y, duel.level.floor.y - 1);
+      const kz = Math.min(zoom * 1.9, 90 * view.dpr);
+      const kk = damp(5, dt);
+      this.x = lerp(this.x, t.x, kk);
+      this.y = lerp(this.y, fy, kk);
+      this.zoom = lerp(this.zoom, kz, damp(3, dt));
+      return;
+    }
     const k = damp(3.2, dt);
     this.x = lerp(this.x, cx, k);
     this.y = lerp(this.y, ty, k);
@@ -107,6 +121,14 @@ export class SceneRenderer {
   ghost: Array<{ x: number; y: number }> | null = null;
   /** Tutorial: show the whole aim preview instead of its start. */
   fullPreview = false;
+  /** Comic speech bubbles above the fighters. */
+  private bubbles: Array<{ side: 0 | 1; text: string; t: number; life: number }> = [];
+
+  /** A short comic word bubble above a fighter. */
+  say(side: 0 | 1, text: string, life = 1.6): void {
+    this.bubbles = this.bubbles.filter((b) => b.side !== side);
+    this.bubbles.push({ side, text, t: 0, life });
+  }
 
   constructor(private duel: Duel) {
     this.backdrop = new Backdrop(duel.level.world.id, duel.level.seed % 1000);
@@ -125,6 +147,7 @@ export class SceneRenderer {
     this.fx.list = [];
     this.ghost = null;
     this.fullPreview = false;
+    this.bubbles = [];
   }
 
   toScreen = (x: number, y: number, view: View): [number, number] => [
@@ -132,11 +155,24 @@ export class SceneRenderer {
     (y - this.cam.y) * this.cam.zoom + view.h / 2,
   ];
 
-  update(dt: number, view: View): void {
+  /** `realDt` (unscaled by slow motion) drives the camera so the kill cam zooms in promptly. */
+  update(dt: number, view: View, realDt = dt): void {
     this.time += dt;
-    this.cam.update(this.duel, view, dt);
+    this.cam.update(this.duel, view, realDt);
     this.fx.update(dt);
     this.ambient(dt, view);
+    for (const b of this.bubbles) b.t += dt;
+    this.bubbles = this.bubbles.filter((b) => b.t < b.life);
+    // smoke from a fighter hit by a fire arrow, flames on fire arrows
+    for (const f of this.duel.fighters) {
+      if (f.burnT <= 0 || Math.random() > dt * 14) continue;
+      const c = f.rag.head.getPosition();
+      this.fx.add({ kind: 'puff', x: c.x + (Math.random() - 0.5) * 0.3, y: c.y - 0.2, vy: -1.2, vx: (Math.random() - 0.5) * 0.4, size: 0.12, color: 'rgba(90,80,85,0.55)', life: 0.9, drag: 1 });
+    }
+    for (const p of this.duel.projectiles) {
+      if (!p.fire || Math.random() > dt * 40) continue;
+      this.fx.add({ kind: 'ember', x: p.f.x, y: p.f.y, vx: (Math.random() - 0.5) * 0.8, vy: -0.6, size: 0.1, color: Math.random() < 0.5 ? '#ffb347' : '#ff6a1f', life: 0.45 });
+    }
   }
 
   draw(ctx: Ctx, view: View): void {
@@ -185,8 +221,9 @@ export class SceneRenderer {
     if (!this.clean && aimPhase && duel.current.aim) this.drawAim(ctx, duel.current, lw, px);
     if (!this.clean && aimPhase) this.drawTurnMarker(ctx, duel.current, lw);
 
+    for (const b of duel.bonuses) if (b.alive) this.drawBonus(ctx, b.def.kind, b.def.reward, b.x, b.y, lw);
     for (const p of duel.projectiles) {
-      this.drawTrail(ctx, p.trail, p.w.look, lw);
+      this.drawTrail(ctx, p.trail, p.fire ? 'meteor' : p.w.look, lw);
       ctx.save();
       ctx.translate(p.f.x, p.f.y);
       ctx.rotate(p.angle);
@@ -221,6 +258,208 @@ export class SceneRenderer {
     ctx.fillStyle = vg;
     ctx.fillRect(0, 0, view.w, view.h);
     this.fx.drawTexts(ctx, (x, y) => this.toScreen(x, y, view), z, view.dpr);
+    this.drawBubbles(ctx, view);
+  }
+
+  private drawBubbles(ctx: Ctx, view: View): void {
+    const d = view.dpr;
+    ctx.font = `700 ${Math.round(15 * d)}px Fredoka, "Trebuchet MS", sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const b of this.bubbles) {
+      const f = this.duel.fighters[b.side];
+      if (f.fallen) continue;
+      const h = f.rag.head.getPosition();
+      const [sx, sy0] = this.toScreen(h.x, h.y - 0.55 * f.rag.scale, view);
+      const pop = Math.min(1, b.t * 8);
+      const fade = Math.min(1, (b.life - b.t) * 4);
+      const w = ctx.measureText(b.text).width + 18 * d;
+      const hh = 28 * d;
+      const x = Math.max(w / 2 + 4 * d, Math.min(view.w - w / 2 - 4 * d, sx + (b.side === 0 ? 1 : -1) * 18 * d));
+      const y = Math.max(hh + 70 * d, sy0 - 22 * d);
+      ctx.save();
+      ctx.globalAlpha = fade;
+      ctx.translate(x, y);
+      ctx.scale(pop, pop);
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = OUTLINE;
+      ctx.lineWidth = 2.5 * d;
+      ctx.beginPath();
+      // roundRect is missing on older Safari: plain rectangle there
+      if (typeof ctx.roundRect === 'function') ctx.roundRect(-w / 2, -hh / 2, w, hh, 10 * d);
+      else ctx.rect(-w / 2, -hh / 2, w, hh);
+      ctx.moveTo(-6 * d * (b.side === 0 ? 1 : -1), hh / 2);
+      ctx.lineTo(-14 * d * (b.side === 0 ? 1 : -1), hh / 2 + 10 * d);
+      ctx.lineTo(4 * d * (b.side === 0 ? 1 : -1), hh / 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(-14 * d, hh / 2 - 3 * d, 22 * d, 4 * d);
+      ctx.fillStyle = OUTLINE;
+      ctx.fillText(b.text, 0, 1 * d);
+      ctx.restore();
+    }
+  }
+
+  /** Floating bonus: a balloon, a crate held by two balloons, or a (golden) bird. */
+  drawBonus(ctx: Ctx, kind: string, reward: string, x: number, y: number, lw: number): void {
+    const col: Record<string, string> = { coins: '#ffd23d', fire: '#ff6a1f', triple: '#3cc4ff', shield: '#7be0ff', heal: '#ff6fb5' };
+    const c = col[reward] ?? '#ffd23d';
+    const t = this.time;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    const balloon = (bx: number, by: number, r: number, fill: string) => {
+      ctx.strokeStyle = 'rgba(30,26,43,0.7)';
+      ctx.lineWidth = lw * 0.6;
+      ctx.beginPath();
+      ctx.moveTo(bx, by + r);
+      ctx.quadraticCurveTo(bx + Math.sin(t * 3) * 0.08, by + r + 0.3, bx, by + r + 0.55);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.ellipse(bx, by, r * 0.85, r, 0, 0, Math.PI * 2);
+      ctx.fillStyle = fill;
+      ctx.fill();
+      ctx.strokeStyle = OUTLINE;
+      ctx.lineWidth = lw;
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      ctx.beginPath();
+      ctx.ellipse(bx - r * 0.3, by - r * 0.35, r * 0.18, r * 0.3, -0.5, 0, Math.PI * 2);
+      ctx.fill();
+    };
+    if (kind === 'balloon') {
+      balloon(0, -0.1, 0.36, c);
+      this.drawRewardIcon(ctx, reward, 0, -0.12, 0.17, lw);
+    } else if (kind === 'crate') {
+      balloon(-0.28, -0.85, 0.26, c);
+      balloon(0.28, -0.9, 0.26, c);
+      ctx.fillStyle = '#c98b4a';
+      ctx.strokeStyle = OUTLINE;
+      ctx.lineWidth = lw;
+      ctx.beginPath();
+      ctx.rect(-0.34, -0.3, 0.68, 0.6);
+      ctx.fill();
+      ctx.stroke();
+      ctx.strokeStyle = '#8a5a3b';
+      ctx.lineWidth = lw * 0.9;
+      line(ctx, -0.3, -0.26, 0.3, 0.26);
+      line(ctx, -0.3, 0.26, 0.3, -0.26);
+      ctx.fillStyle = '#fff6dd';
+      ctx.beginPath();
+      ctx.arc(0, 0, 0.17, 0, Math.PI * 2);
+      ctx.fill();
+      this.drawRewardIcon(ctx, reward, 0, 0, 0.13, lw);
+    } else {
+      // a friendly golden bird carrying a little bag
+      const flap = Math.sin(t * 14) * 0.25;
+      const dir = Math.cos(t * 0.7) >= 0 ? 1 : -1;
+      ctx.scale(dir, 1);
+      ctx.fillStyle = '#ffd23d';
+      ctx.strokeStyle = OUTLINE;
+      ctx.lineWidth = lw;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 0.3, 0.2, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(0.26, -0.12, 0.13, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#ff8a2a';
+      ctx.beginPath();
+      ctx.moveTo(0.37, -0.12);
+      ctx.lineTo(0.5, -0.08);
+      ctx.lineTo(0.37, -0.04);
+      ctx.fill();
+      ctx.fillStyle = OUTLINE;
+      ctx.beginPath();
+      ctx.arc(0.29, -0.15, 0.03, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ffe98a';
+      ctx.beginPath();
+      ctx.moveTo(-0.05, -0.05);
+      ctx.lineTo(-0.25, -0.3 - flap);
+      ctx.lineTo(0.12, -0.08);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.scale(dir, 1);
+      ctx.fillStyle = '#fff6dd';
+      ctx.beginPath();
+      ctx.arc(0, 0.32, 0.14, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = OUTLINE;
+      ctx.stroke();
+      this.drawRewardIcon(ctx, reward, 0, 0.32, 0.1, lw);
+    }
+    ctx.restore();
+  }
+
+  /** Small icon for a reward: coin, flame, triple arrows, shield, heart. */
+  drawRewardIcon(ctx: Ctx, reward: string, x: number, y: number, r: number, lw: number): void {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.lineWidth = lw * 0.7;
+    ctx.strokeStyle = OUTLINE;
+    switch (reward) {
+      case 'coins':
+        ctx.fillStyle = '#ffc21d';
+        ctx.beginPath();
+        ctx.arc(0, 0, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#fff3a0';
+        ctx.fillRect(-r * 0.15, -r * 0.55, r * 0.3, r * 1.1);
+        break;
+      case 'fire':
+        ctx.fillStyle = '#ff6a1f';
+        ctx.beginPath();
+        ctx.moveTo(0, -r * 1.2);
+        ctx.quadraticCurveTo(r * 1.1, -r * 0.1, 0, r);
+        ctx.quadraticCurveTo(-r * 1.1, -r * 0.1, 0, -r * 1.2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#ffd23d';
+        ctx.beginPath();
+        ctx.ellipse(0, r * 0.3, r * 0.35, r * 0.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+      case 'triple':
+        ctx.strokeStyle = '#1e5fa8';
+        ctx.lineWidth = r * 0.28;
+        // three arrows fanning out
+        for (const a of [-0.5, 0, 0.5]) {
+          const ex = -r + Math.cos(a) * r * 2;
+          const ey = Math.sin(a) * r * 2;
+          ctx.beginPath();
+          ctx.moveTo(-r, 0);
+          ctx.lineTo(ex, ey);
+          ctx.stroke();
+        }
+        break;
+      case 'shield':
+        ctx.fillStyle = '#7be0ff';
+        ctx.beginPath();
+        ctx.moveTo(0, -r);
+        ctx.lineTo(r * 0.9, -r * 0.6);
+        ctx.quadraticCurveTo(r * 0.8, r * 0.6, 0, r);
+        ctx.quadraticCurveTo(-r * 0.8, r * 0.6, -r * 0.9, -r * 0.6);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        break;
+      default:
+        ctx.fillStyle = '#ff4d6d';
+        ctx.beginPath();
+        ctx.moveTo(0, r * 0.9);
+        ctx.bezierCurveTo(-r * 1.4, -r * 0.1, -r * 0.6, -r * 1.2, 0, -r * 0.4);
+        ctx.bezierCurveTo(r * 0.6, -r * 1.2, r * 1.4, -r * 0.1, 0, r * 0.9);
+        ctx.fill();
+        ctx.stroke();
+    }
+    ctx.restore();
   }
 
   // ───────────── floor ─────────────

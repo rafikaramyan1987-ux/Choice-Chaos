@@ -97,7 +97,7 @@ function report(results, endless, meta) {
   s += 'The bot plays the real game logic headless. It aims only with what a player sees: the dotted no-wind preview (its error grows with the part of the flight the preview does not show), the wind arrow (partly compensated), the scenery, and the result of its previous shot (partly corrected). It uses the bow and takes a few seconds per turn to aim, so duel times are realistic.\n\n';
   s += '| Profile | aim noise | wind compensated | correction | think time |\n|---|---|---|---|---|\n';
   s += '| beginner | ±0.06 rad | 20% | 45% | ~6 s |\n| average | ±0.035 rad | 55% | 65% | ~4.5 s |\n| good | ±0.018 rad | 85% | 80% | ~3.5 s |\n\n';
-  s += 'Columns: **win** = player win rate · **turns** = turns per duel (both sides) · **time** = average duel length · **blocked** = share of player shots stopped by scenery within 4 m of the player · **player hit rate** = share of player shots that hit the enemy · **AI dmg/turn** = average damage the AI deals per AI turn · **AI 1st hit** = duels where the AI\'s first shot hit.\n\n';
+  s += 'Columns: **win** = player win rate · **turns** = turns per duel (both sides) · **time** = average duel length · **blocked** = share of player shots stopped by scenery within 4 m of the player · **player hit rate** = share of player shots that hit the enemy · **AI dmg/turn** = average damage the AI deals per AI turn · **AI 1st hit** = duels where the AI\'s first shot hit · **ring-outs** = duels won / lost by a ring-out · **bonuses hit** = floating bonuses the player hit per duel.\n\nBonuses (balloons, crates, birds) and ring-outs are part of the simulation. Duel time includes the slow-motion kill cam and headshot slow-mo.\n\n';
   const avgOf = (rows, k, p) => rows.reduce((a, r) => a + r.rows[p][k], 0) / Math.max(1, rows.length);
   s += '## Summary\n\n| Group | beginner win | average win | good win | avg time (average) | blocked (beginner) |\n|---|---|---|---|---|---|\n';
   const groups = [
@@ -112,16 +112,18 @@ function report(results, endless, meta) {
   }
   const minAvg = results.reduce((m, r) => Math.min(m, r.rows.average.win), 1);
   s += `\nLowest average-player win rate on any level: **${pct(minAvg)}**.\n\n`;
+  const ro = (k) => results.reduce((a, r) => a + (r.rows.average[k] ?? 0), 0) / Math.max(1, results.length);
+  s += `Ring-outs (average player): **${pct(ro('ringOutWin'))}** of duels won by knocking the enemy off, **${pct(ro('ringOutLoss'))}** lost by falling off. Bonuses hit per duel: **${ro('bonusHits').toFixed(2)}**.\n\n`;
   if (endless) {
     s += '## Endless\n\n| Profile | waves survived (avg) | avg duel time |\n|---|---|---|\n';
     for (const p of P) s += `| ${p} | ${endless[p].waves.toFixed(1)} | ${endless[p].seconds.toFixed(0)} s |\n`;
     s += '\n';
   }
   for (const w of [...new Set(results.map((r) => r.world))]) {
-    s += `## World ${w} — ${names[w - 1]}\n\n| Level | win B / A / G | turns (A) | time (A) | player hit rate B / A | blocked B / A | AI dmg/turn (A) | AI headshots (B) | AI 1st hit (B) |\n|---|---|---|---|---|---|---|---|---|\n`;
+    s += `## World ${w} — ${names[w - 1]}\n\n| Level | win B / A / G | turns (A) | time (A) | player hit rate B / A | blocked B / A | AI dmg/turn (A) | AI headshots (B) | AI 1st hit (B) | ring-outs won / lost (A) | bonuses hit (A) |\n|---|---|---|---|---|---|---|---|---|---|---|\n`;
     for (const r of results.filter((x) => x.world === w)) {
       const R = r.rows;
-      s += `| ${r.level}${r.boss ? ' (boss)' : ''} | ${pct(R.beginner.win)} / ${pct(R.average.win)} / ${pct(R.good.win)} | ${R.average.turns.toFixed(1)} | ${R.average.seconds.toFixed(0)} s | ${pct(R.beginner.hitRate ?? 0)} / ${pct(R.average.hitRate ?? 0)} | ${pct(R.beginner.blockedNear)} / ${pct(R.average.blockedNear)} | ${R.average.aiDmgPerTurn.toFixed(1)} | ${R.beginner.aiHeadshots} | ${pct(R.beginner.aiFirstHit)} |\n`;
+      s += `| ${r.level}${r.boss ? ' (boss)' : ''} | ${pct(R.beginner.win)} / ${pct(R.average.win)} / ${pct(R.good.win)} | ${R.average.turns.toFixed(1)} | ${R.average.seconds.toFixed(0)} s | ${pct(R.beginner.hitRate ?? 0)} / ${pct(R.average.hitRate ?? 0)} | ${pct(R.beginner.blockedNear)} / ${pct(R.average.blockedNear)} | ${R.average.aiDmgPerTurn.toFixed(1)} | ${R.beginner.aiHeadshots} | ${pct(R.beginner.aiFirstHit)} | ${pct(R.average.ringOutWin ?? 0)} / ${pct(R.average.ringOutLoss ?? 0)} | ${(R.average.bonusHits ?? 0).toFixed(1)} |\n`;
     }
     s += '\n';
   }

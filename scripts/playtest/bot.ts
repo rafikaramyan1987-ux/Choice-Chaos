@@ -37,12 +37,14 @@ export interface Profile {
   think: number;
   /** Chance to go for the head. */
   head: number;
+  /** Chance to go for a floating bonus when one is around. */
+  bonus: number;
 }
 
 export const PROFILES: Profile[] = [
-  { name: 'beginner', angleSd: 0.06, powerSd: 0.08, guessSd: 0.9, windComp: 0.2, correct: 0.45, think: 6, head: 0 },
-  { name: 'average', angleSd: 0.035, powerSd: 0.05, guessSd: 0.6, windComp: 0.55, correct: 0.65, think: 4.5, head: 0.1 },
-  { name: 'good', angleSd: 0.018, powerSd: 0.028, guessSd: 0.35, windComp: 0.85, correct: 0.8, think: 3.5, head: 0.3 },
+  { name: 'beginner', angleSd: 0.06, powerSd: 0.08, guessSd: 0.9, windComp: 0.2, correct: 0.45, think: 6, head: 0, bonus: 0.1 },
+  { name: 'average', angleSd: 0.035, powerSd: 0.05, guessSd: 0.6, windComp: 0.55, correct: 0.65, think: 4.5, head: 0.1, bonus: 0.15 },
+  { name: 'good', angleSd: 0.018, powerSd: 0.028, guessSd: 0.35, windComp: 0.85, correct: 0.8, think: 3.5, head: 0.3, bonus: 0.2 },
 ];
 
 export interface DuelStats {
@@ -56,6 +58,10 @@ export interface DuelStats {
   aiHeadshots: number;
   aiFirstShotHit: boolean;
   playerHits: number;
+  /** The duel ended by a ring-out (player / AI fell off). */
+  playerRingOut: boolean;
+  aiRingOut: boolean;
+  bonusHits: number;
 }
 
 const hero = (L: LevelDef, hp?: number): FighterSetup => ({ look: 'hero', hat: 'none', color: 'blue', weapons: ['bow'], weapon: 'bow', hp: hp ?? L.playerHp, maxHp: L.playerHp, ai: false });
@@ -69,7 +75,7 @@ export function playDuel(L: LevelDef, prof: Profile, seed: number, playerHp?: nu
     right: { look: L.enemy.kind, hat: 'none', color: 'red', weapons: L.enemy.weapons, weapon: L.enemy.weapons[0] ?? 'bow', hp: L.enemy.hp, ai: true, scale: L.enemy.scale, boss: L.enemy.boss },
     seed,
   });
-  const st: DuelStats = { won: false, turns: 0, seconds: 0, playerShots: 0, blockedNear: 0, aiTurns: 0, aiDamage: 0, aiHeadshots: 0, aiFirstShotHit: false, playerHits: 0 };
+  const st: DuelStats = { won: false, turns: 0, seconds: 0, playerShots: 0, blockedNear: 0, aiTurns: 0, aiDamage: 0, aiHeadshots: 0, aiFirstShotHit: false, playerHits: 0, playerRingOut: false, aiRingOut: false, bonusHits: 0 };
   let aiShotIndex = 0;
   duel.on((e) => {
     if (e.type === 'hit' && e.side === 0) {
@@ -88,6 +94,7 @@ export function playDuel(L: LevelDef, prof: Profile, seed: number, playerHp?: nu
   const blocked = makeBlocker(L.solids.map((s) => s.shape));
   let bias: Vec = { x: 0, y: 0 };
   let thinking = 0;
+  let slowExtra = 0;
   const dt = 1 / 60;
   for (let t = 0; t < 900 && duel.phase !== 'over'; t += dt) {
     if (duel.humanAiming) {
@@ -107,11 +114,16 @@ export function playDuel(L: LevelDef, prof: Profile, seed: number, playerHp?: nu
       duel.fire();
       st.playerShots++;
     }
+    // slow motion (kill cam, headshots) takes real time too
+    slowExtra += dt / duel.timeScale - dt;
     duel.update(dt);
   }
   st.won = duel.winner === 0;
   st.turns = duel.turnNumber;
-  st.seconds = duel.time + thinking;
+  st.seconds = duel.time + thinking + slowExtra;
+  st.playerRingOut = duel.fighters[0].ringedOut;
+  st.aiRingOut = duel.fighters[1].ringedOut;
+  st.bonusHits = duel.fighters[0].bonuses;
   return { ...st, hpLeft: duel.fighters[0].hp };
 }
 
@@ -121,7 +133,10 @@ function plan(duel: Duel, prof: Profile, rng: Rng, bias: Vec, blocked: (ax: numb
   const foe = duel.fighters[1];
   const w = me.def;
   const aimHead = rng.chance(prof.head);
-  const c = aimHead ? foe.rag.head.getPosition() : foe.center();
+  let c: Vec = aimHead ? foe.rag.head.getPosition() : foe.center();
+  // like a player, sometimes go for a floating bonus
+  const bonus = duel.bonuses.find((b) => b.alive);
+  if (bonus && !me.power && rng.chance(prof.bonus)) c = { x: bonus.x, y: bonus.y };
   // aim point corrected by part of the last miss
   const target = { x: c.x, y: c.y - bias.y };
   const wind = duel.wind * prof.windComp;
@@ -168,7 +183,7 @@ export interface LevelReport {
   world: number;
   level: number;
   boss: boolean;
-  rows: Record<Profile['name'], { win: number; turns: number; seconds: number; blockedNear: number; aiDmgPerTurn: number; aiHeadshots: number; aiFirstHit: number; hitRate: number }>;
+  rows: Record<Profile['name'], { win: number; turns: number; seconds: number; blockedNear: number; aiDmgPerTurn: number; aiHeadshots: number; aiFirstHit: number; hitRate: number; ringOutWin: number; ringOutLoss: number; bonusHits: number }>;
 }
 
 export function runLevel(world: number, level: number, runs: number, seedBase = 1): LevelReport {
@@ -188,6 +203,9 @@ export function runLevel(world: number, level: number, runs: number, seedBase = 
       aiHeadshots: all.reduce((a, s) => a + s.aiHeadshots, 0),
       aiFirstHit: all.filter((s) => s.aiFirstShotHit).length / runs,
       hitRate: shots ? all.reduce((a, s) => a + s.playerHits, 0) / shots : 0,
+      ringOutWin: all.filter((s) => s.aiRingOut).length / runs,
+      ringOutLoss: all.filter((s) => s.playerRingOut).length / runs,
+      bonusHits: avg(all.map((s) => s.bonusHits)),
     };
   }
   return { world, level, boss: L.boss, rows };

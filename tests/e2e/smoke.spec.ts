@@ -95,3 +95,17 @@ test('the tutorial can be skipped and is shown only once', async ({ page }) => {
   await page.waitForTimeout(800);
   await expect(page.locator('.tutorial')).toHaveCount(0);
 });
+
+test('daily rewards: open the chest once, 3 missions', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#daily .dot')).toBeVisible();
+  await page.locator('#daily').click();
+  await expect(page.locator('.mission')).toHaveCount(3);
+  const before = Number(await page.locator('.coins').first().textContent());
+  await page.locator('#open-chest').click();
+  await expect(page.locator('#open-chest')).toHaveCount(0);
+  const after = Number(await page.locator('.coins').first().textContent());
+  expect(after).toBeGreaterThan(before);
+  await page.locator('.topbar .btn').first().click();
+  await expect(page.locator('#daily .dot')).toHaveCount(0);
+});

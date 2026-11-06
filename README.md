@@ -35,6 +35,13 @@ No blood or gore — sparks, stars and comic damage numbers instead (aimed at PE
 - **First-time tutorial** on level 1: an animated hand shows the drag, the first shot follows a glowing
   path, and short tips appear the first time something happens (a hit, wind, several weapons).
   Skippable, shown once.
+- **"One more try" extras:** a slow-motion **kill cam** on the final hit (tap to skip), short slow-mo on
+  headshots; **floating bonuses** (balloons, crates, golden birds) that give coins or a one-shot power-up
+  (fire arrow, triple shot, shield, +20 HP) — the AI grabs them too; **ring-outs** (a heavy hit can knock a
+  weakened fighter off the platform for an instant K.O., never on levels 1–3); hats that fly off on
+  headshots, comic word bubbles, boss taunts, dizzy stars on low HP.
+- **Daily chest + 3 daily missions**, Perfect / Sharpshooter / headshot-streak bonus coins, 15 hats and
+  12 colours in the shop.
 - **Gentle start:** on levels 1–3 the AI never headshots, always misses its first shot and hits softly;
   nothing stands near the player's line of fire.
 

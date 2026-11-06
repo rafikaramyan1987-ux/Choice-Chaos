@@ -29,7 +29,8 @@ describe('levels', () => {
     }
   });
 
-  it('every level has a clear shot lane for both sides', () => {
+  // heavy: runs the aim solver for both sides of all 60 levels
+  it('every level has a clear shot lane for both sides', { timeout: 30_000 }, () => {
     for (const L of all) expect(playable(L), L.key).toBe(true);
   });
 

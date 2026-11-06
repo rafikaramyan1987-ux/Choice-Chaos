@@ -57,3 +57,20 @@ describe('trajectory', () => {
     expect(Math.hypot(last.x - f.x, last.y - f.y)).toBeLessThan(0.2);
   });
 });
+
+describe('makeBlocker', () => {
+  it('matches the exact shape test', async () => {
+    const { makeBlocker, segShape, rect } = await import('../../src/core/geometry');
+    const shapes = [
+      { kind: 'poly' as const, pts: rect(2, -3, 3, 1) },
+      { kind: 'circle' as const, c: { x: 6, y: -1 }, r: 0.5 },
+    ];
+    const blocked = makeBlocker(shapes);
+    const segs: Array<[number, number, number, number]> = [
+      [0, 0, 5, 0], [0, -4, 5, -4], [5, -1, 7, -1], [5, -2, 7, -2], [2.5, -5, 2.5, 5], [10, 0, 11, 0],
+    ];
+    for (const [ax, ay, bx, by] of segs) {
+      expect(blocked(ax, ay, bx, by)).toBe(shapes.some((s) => !!segShape(ax, ay, bx, by, s)));
+    }
+  });
+});

@@ -1,7 +1,7 @@
 import { Circle, Polygon, World, type Body } from 'planck';
 import { applyError, chooseWeapon, perceivedWind, solveAim } from '../core/ai';
 import { blastDamage, hitDamage, type Zone } from '../core/damage';
-import { distToSegSq, segCircle, segShape, type SegHit } from '../core/geometry';
+import { distToSegSq, makeBlocker, segCircle, segShape, type SegHit } from '../core/geometry';
 import { clamp, lerp, wrapAngle, type Vec } from '../core/math';
 import { Rng } from '../core/rng';
 import { GRAVITY, launch, SIM_DT, speedFor, step, type Flight } from '../core/trajectory';
@@ -303,10 +303,10 @@ export class Duel {
 
   // ───────────── AI ─────────────
 
-  private blocked = (ax: number, ay: number, bx: number, by: number): boolean => {
-    for (const s of this.solids) if (segShape(ax, ay, bx, by, s.shape)) return true;
-    return false;
-  };
+  /** Scenery collision test for the aim solver (rebuilt per solve: chunks can crumble). */
+  private blocker(): (ax: number, ay: number, bx: number, by: number) => boolean {
+    return makeBlocker(this.solids.map((s) => s.shape));
+  }
 
   private planAI(): void {
     const f = this.current;
@@ -322,9 +322,10 @@ export class Duel {
     const restAngle = f.restAngle();
     const from = f.launchPoint(restAngle);
     const wind = this.aiPerfect ? this.wind : perceivedWind(this.wind, L.skill, this.rng);
-    let sol = solveAim({ from, target, weapon: w, wind, blocked: this.blocked });
+    const blocked = this.blocker();
+    let sol = solveAim({ from, target, weapon: w, wind, blocked });
     // the launch point depends on the angle: refine once from the solved angle
-    sol = solveAim({ from: f.launchPoint(sol.angle), target, weapon: w, wind, blocked: this.blocked });
+    sol = solveAim({ from: f.launchPoint(sol.angle), target, weapon: w, wind, blocked });
     if (!this.aiPerfect) sol = applyError(sol, w, L.skill, this.rng);
     const think = lerp(1.3, 0.8, L.skill) + this.rng.range(0, 0.4);
     this.aiPlan = { at: think, fireAt: think + 0.7, angle: sol.angle, speed: sol.speed, weapon };
@@ -731,8 +732,9 @@ export class Duel {
     const foe = this.other(f.side);
     const target = aimHead ? foe.rag.head.getPosition() : foe.center();
     const tgt = { x: target.x, y: target.y };
-    let sol = solveAim({ from: f.launchPoint(f.restAngle()), target: tgt, weapon: f.def, wind: this.wind, blocked: this.blocked });
-    sol = solveAim({ from: f.launchPoint(sol.angle), target: tgt, weapon: f.def, wind: this.wind, blocked: this.blocked });
+    const blocked = this.blocker();
+    let sol = solveAim({ from: f.launchPoint(f.restAngle()), target: tgt, weapon: f.def, wind: this.wind, blocked });
+    sol = solveAim({ from: f.launchPoint(sol.angle), target: tgt, weapon: f.def, wind: this.wind, blocked });
     return { angle: sol.angle, power: sol.power };
   }
 

@@ -1,5 +1,5 @@
 import { solveAim } from '../core/ai';
-import { beam, rect, segShape, type Shape } from '../core/geometry';
+import { beam, makeBlocker, rect, type Shape } from '../core/geometry';
 import { clamp, lerp, type Vec } from '../core/math';
 import { hashSeed, Rng } from '../core/rng';
 import { WEAPONS, type WeaponId } from '../core/weapons';
@@ -408,7 +408,7 @@ export interface LevelOptions {
 
 /** Can both fighters hit each other with a bow (some lane through the obstacles)? */
 export function playable(L: LevelDef): boolean {
-  const blocked = (ax: number, ay: number, bx: number, by: number) => L.solids.some((s) => !!segShape(ax, ay, bx, by, s.shape));
+  const blocked = makeBlocker(L.solids.map((s) => s.shape));
   const sides: Array<{ from: Vec; to: Vec; s1: number; s2: number; dir: number }> = [
     { from: L.playerSpot, to: L.enemySpot, s1: 1, s2: L.enemy.scale, dir: 1 },
     { from: L.enemySpot, to: L.playerSpot, s1: L.enemy.scale, s2: 1, dir: -1 },

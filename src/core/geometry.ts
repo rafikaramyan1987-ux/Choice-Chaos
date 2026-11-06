@@ -131,3 +131,25 @@ export function beam(a: Vec, b: Vec, half: number): Vec[] {
     { x: a.x - nx, y: a.y - ny },
   ];
 }
+
+/**
+ * A fast "does segment a→b hit any of these shapes?" test: each shape's bounding
+ * box is computed once and checked before the exact intersection.
+ */
+export function makeBlocker(shapes: Shape[]): (ax: number, ay: number, bx: number, by: number) => boolean {
+  const boxes = shapes.map((s) => {
+    if (s.kind === 'circle') return { s, minX: s.c.x - s.r, maxX: s.c.x + s.r, minY: s.c.y - s.r, maxY: s.c.y + s.r };
+    return { s, ...bounds(s.pts) };
+  });
+  return (ax, ay, bx, by) => {
+    const x0 = ax < bx ? ax : bx;
+    const x1 = ax < bx ? bx : ax;
+    const y0 = ay < by ? ay : by;
+    const y1 = ay < by ? by : ay;
+    for (const b of boxes) {
+      if (x1 < b.minX || x0 > b.maxX || y1 < b.minY || y0 > b.maxY) continue;
+      if (segShape(ax, ay, bx, by, b.s)) return true;
+    }
+    return false;
+  };
+}

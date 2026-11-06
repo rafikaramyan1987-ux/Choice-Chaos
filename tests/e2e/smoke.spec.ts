@@ -30,6 +30,8 @@ test('loads, starts level 1 and fires a shot by dragging', async ({ page }) => {
     const d = (window as unknown as { __stickDuel: Hook }).__stickDuel.duel;
     return d?.phase === 'aim' && d.turn === 0;
   });
+  // first time on level 1: the tutorial hand shows the drag
+  await expect(page.locator('.tutorial .hand')).toBeVisible();
 
   // drag back (down-left) and release: shoots up and to the right
   const vp = page.viewportSize()!;
@@ -46,6 +48,9 @@ test('loads, starts level 1 and fires a shot by dragging', async ({ page }) => {
   });
   const s1 = await page.evaluate(state);
   expect(s1?.shots).toBe(1);
+  // the guided first shot ends the tutorial, and it is saved
+  await expect(page.locator('.tutorial')).toHaveCount(0);
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('stick-duel.save.v1') ?? '{}').tutorial)).toBe(true);
   // the shot resolves and the turn passes to the enemy (or the enemy is hit)
   await page.waitForFunction(() => {
     const d = (window as unknown as { __stickDuel: Hook }).__stickDuel.duel;
@@ -74,4 +79,33 @@ test('every screen opens: map, shop, settings, 2 players, endless', async ({ pag
   await page.locator('#endless').click();
   await page.locator('#endless-start').click();
   await expect(page.locator('#fight')).toBeVisible();
+});
+
+test('the tutorial can be skipped and is shown only once', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#play').click();
+  await page.locator('.node[data-level="1"]').click();
+  await page.locator('#fight').click();
+  await page.locator('#skip-tutorial').click();
+  await expect(page.locator('.tutorial')).toHaveCount(0);
+  await page.reload();
+  await page.locator('#play').click();
+  await page.locator('.node[data-level="1"]').click();
+  await page.locator('#fight').click();
+  await page.waitForTimeout(800);
+  await expect(page.locator('.tutorial')).toHaveCount(0);
+});
+
+test('daily rewards: open the chest once, 3 missions', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#daily .dot')).toBeVisible();
+  await page.locator('#daily').click();
+  await expect(page.locator('.mission')).toHaveCount(3);
+  const before = Number(await page.locator('.coins').first().textContent());
+  await page.locator('#open-chest').click();
+  await expect(page.locator('#open-chest')).toHaveCount(0);
+  const after = Number(await page.locator('.coins').first().textContent());
+  expect(after).toBeGreaterThan(before);
+  await page.locator('.topbar .btn').first().click();
+  await expect(page.locator('#daily .dot')).toHaveCount(0);
 });

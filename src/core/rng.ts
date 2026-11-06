@@ -1,48 +1,38 @@
-/** Small deterministic PRNG helpers (mulberry32 + string hashing). */
-export type Rng = () => number;
-
-export function hashString(str: string): number {
-  // FNV-1a 32-bit
-  let h = 0x811c9dc5;
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
+/** Small seeded PRNG (mulberry32) so every level layout is reproducible. */
+export class Rng {
+  private s: number;
+  constructor(seed: number) {
+    this.s = seed >>> 0 || 1;
   }
-  return h >>> 0;
-}
-
-export function mulberry32(seed: number): Rng {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
+  next(): number {
+    let t = (this.s = (this.s + 0x6d2b79f5) >>> 0);
     t = Math.imul(t ^ (t >>> 15), t | 1);
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-export function randInt(rng: Rng, min: number, max: number): number {
-  return min + Math.floor(rng() * (max - min + 1));
-}
-
-export function shuffle<T>(items: readonly T[], rng: Rng): T[] {
-  const a = items.slice();
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    const tmp = a[i] as T;
-    a[i] = a[j] as T;
-    a[j] = tmp;
   }
-  return a;
+  range(a: number, b: number): number {
+    return a + (b - a) * this.next();
+  }
+  int(a: number, b: number): number {
+    return Math.floor(this.range(a, b + 1));
+  }
+  pick<T>(arr: readonly T[]): T {
+    return arr[Math.floor(this.next() * arr.length)] as T;
+  }
+  chance(p: number): boolean {
+    return this.next() < p;
+  }
+  /** Approximately normal (sum of 3 uniforms), mean 0, sd ≈ 1. */
+  gauss(): number {
+    return (this.next() + this.next() + this.next() - 1.5) * 2;
+  }
 }
 
-export function randomSeed(): number {
-  try {
-    const buf = new Uint32Array(1);
-    crypto.getRandomValues(buf);
-    return buf[0] ?? Date.now() >>> 0;
-  } catch {
-    return (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0;
+export function hashSeed(...parts: number[]): number {
+  let h = 2166136261;
+  for (const p of parts) {
+    h ^= p + 0x9e3779b9;
+    h = Math.imul(h, 16777619);
   }
+  return h >>> 0;
 }

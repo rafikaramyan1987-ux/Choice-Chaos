@@ -1,53 +1,319 @@
-import en from './en.json';
-import fr from './fr.json';
+const en = {
+  'title.tagline': 'Aim. Release. Bonk!',
+  'menu.play': 'Adventure',
+  'menu.versus': '2 Players',
+  'menu.endless': 'Endless',
+  'menu.shop': 'Shop',
+  'menu.settings': 'Settings',
+  'loading': 'Loading…',
+  'common.back': 'Back',
+  'common.locked': 'Locked',
+  'common.close': 'Close',
+  'map.title': 'World map',
+  'map.unlock': 'Beat {boss} to unlock',
+  'map.stars': '{n}/30',
+  'world.forest': 'Whispering Forest',
+  'world.castle': 'Castle Ramparts',
+  'world.mountains': 'Windy Peaks',
+  'world.desert': 'Sunscorch Desert',
+  'world.snow': 'Frostbite Lake',
+  'world.volcano': 'Magma Mountain',
+  'enemy.ranger': 'Forest Ranger',
+  'enemy.knight': 'Castle Knight',
+  'enemy.viking': 'Mountain Viking',
+  'enemy.nomad': 'Desert Nomad',
+  'enemy.yeti': 'Snow Yeti',
+  'enemy.golem': 'Fire Golem',
+  'boss.oakheart.name': 'Oakheart the Ranger Chief',
+  'boss.oakheart.intro': 'Nobody passes my forest! Try dodging THREE arrows at once.',
+  'boss.ironclad.name': 'Sir Ironclad',
+  'boss.ironclad.intro': 'My cannonballs have never missed a party. Hide behind the battlements if you can!',
+  'boss.stormbeard.name': 'Jarl Stormbeard',
+  'boss.stormbeard.intro': 'The wind is my friend and my axe is HUGE. Ready?',
+  'boss.sandking.name': 'The Sand King',
+  'boss.sandking.intro': 'My twin boomerangs always come back. Do you?',
+  'boss.frostfang.name': 'Frostfang the Yeti King',
+  'boss.frostfang.intro': 'ROAR! Time for a giant snowball fight!',
+  'boss.magmor.name': 'Magmor the Fire Golem',
+  'boss.magmor.intro': 'Feel the heat! My meteors melt everything… except fun.',
+  'intro.level': 'Level {n}',
+  'intro.boss': 'Boss fight!',
+  'intro.vs': 'VS',
+  'intro.wind': 'Wind',
+  'intro.calm': 'Calm',
+  'intro.fight': 'Fight!',
+  'intro.weapon': 'Your weapon',
+  'intro.try': 'Try {w} for this duel',
+  'intro.tryAd': 'Watch an ad to try {w} for this duel',
+  'intro.tutorial': 'Drag back and release to shoot. Hit the head for extra damage!',
+  'hud.yourTurn': 'Your turn!',
+  'hud.enemyTurn': 'Enemy turn',
+  'hud.p1Turn': 'Player 1',
+  'hud.p2Turn': 'Player 2',
+  'hud.you': 'You',
+  'hud.p1': 'P1',
+  'hud.p2': 'P2',
+  'hud.wave': 'Wave {n}',
+  'hud.headshot': 'HEADSHOT!',
+  'hud.ko': 'K.O.!',
+  'hud.timeout': 'Too slow!',
+  'hud.miss': 'Miss!',
+  'hud.fall': 'Oops!',
+  'hud.dragHint': 'Drag back & release',
+  'pause.title': 'Paused',
+  'pause.resume': 'Resume',
+  'pause.restart': 'Restart',
+  'pause.quit': 'Quit',
+  'result.win': 'Victory!',
+  'result.lose': 'Defeat',
+  'result.p1wins': 'Player 1 wins!',
+  'result.p2wins': 'Player 2 wins!',
+  'result.coins': '+{n} coins',
+  'result.double': 'Double coins',
+  'result.doubled': 'Coins doubled!',
+  'result.next': 'Next',
+  'result.retry': 'Retry',
+  'result.map': 'Map',
+  'result.menu': 'Menu',
+  'result.revive': 'Revive & keep fighting',
+  'result.shots': 'Shots: {n} (par {p})',
+  'result.hp': 'HP left: {n}',
+  'result.unlocked': 'New world unlocked: {w}!',
+  'result.rematch': 'Rematch',
+  'result.waves': 'Enemies defeated: {n}',
+  'result.best': 'Best: {n}',
+  'result.newBest': 'New best!',
+  'result.continue': 'Continue',
+  'result.adFail': 'No ad available right now — no worries!',
+  'shop.title': 'Shop',
+  'shop.weapons': 'Weapons',
+  'shop.hats': 'Hats',
+  'shop.colors': 'Colours',
+  'shop.equip': 'Equip',
+  'shop.equipped': 'Equipped',
+  'shop.buy': 'Buy',
+  'shop.requires': 'Beat world {n}',
+  'settings.title': 'Settings',
+  'settings.sound': 'Sound effects',
+  'settings.music': 'Music',
+  'settings.lang': 'Language',
+  'settings.auto': 'Auto',
+  'settings.on': 'On',
+  'settings.off': 'Off',
+  'versus.title': '2 Players',
+  'versus.pick': 'Pick a world',
+  'versus.start': 'Start duel',
+  'versus.hint': 'Take turns on the same device.',
+  'endless.title': 'Endless',
+  'endless.hint': 'Beat as many enemies as you can. You heal a little after each win.',
+  'endless.start': 'Start',
+  'weapon.bow': 'Bow',
+  'weapon.axe': 'Throwing axe',
+  'weapon.spear': 'Spear',
+  'weapon.bomb': 'Bomb',
+  'weapon.boomerang': 'Boomerang',
+  'weapon.staff': 'Magic staff',
+  'weapon.volley': 'Triple volley',
+  'weapon.cannon': 'Cannonball',
+  'weapon.greataxe': 'Giant axe',
+  'weapon.twinrang': 'Twin boomerangs',
+  'weapon.snowball': 'Giant snowball',
+  'weapon.meteor': 'Meteor',
+  'wdesc.bow': 'Fast and precise. Arrows stick!',
+  'wdesc.axe': 'Spins through the air. Big hits.',
+  'wdesc.spear': 'Heavy and straight. Wind barely moves it.',
+  'wdesc.bomb': 'Arcs and explodes. Great against cover.',
+  'wdesc.boomerang': 'Curves back. Floats on the air.',
+  'wdesc.staff': 'Magic bolt. Ignores the wind!',
+  'hat.none': 'No hat',
+  'hat.cap': 'Cap',
+  'hat.headband': 'Headband',
+  'hat.tophat': 'Top hat',
+  'hat.pirate': 'Pirate hat',
+  'hat.wizard': 'Wizard hat',
+  'hat.viking': 'Viking helmet',
+  'hat.crown': 'Crown',
+  'hat.propeller': 'Propeller cap',
+  'color.blue': 'Blue',
+  'color.red': 'Red',
+  'color.green': 'Green',
+  'color.purple': 'Purple',
+  'color.orange': 'Orange',
+  'color.pink': 'Pink',
+  'color.black': 'Shadow',
+  'color.gold': 'Gold',
+};
 
-export interface Locale {
-  meta: { name: string; code: string };
-  ui: Record<string, string>;
-  recipes: Record<string, string>;
-  ingredients: Record<string, string>;
-  machines: Record<string, string>;
-  decor: Record<string, string>;
-  achievements: Record<string, string>;
-  expansions: Record<string, string>;
-  expansionInfo: Record<string, string>;
-  guests: Record<string, string>;
-}
+export type Key = keyof typeof en;
 
-/**
- * Registered languages. To add one: copy en.json, translate the values,
- * import it here and add it to this object.
- */
-export const LOCALES: Record<string, Locale> = { en, fr };
-export const DEFAULT_LANG = 'en';
+const fr: Record<Key, string> = {
+  'title.tagline': 'Vise. Relâche. Bonk !',
+  'menu.play': 'Aventure',
+  'menu.versus': '2 joueurs',
+  'menu.endless': 'Sans fin',
+  'menu.shop': 'Boutique',
+  'menu.settings': 'Réglages',
+  'loading': 'Chargement…',
+  'common.back': 'Retour',
+  'common.locked': 'Verrouillé',
+  'common.close': 'Fermer',
+  'map.title': 'Carte du monde',
+  'map.unlock': 'Bats {boss} pour débloquer',
+  'map.stars': '{n}/30',
+  'world.forest': 'Forêt Murmurante',
+  'world.castle': 'Remparts du Château',
+  'world.mountains': 'Pics Venteux',
+  'world.desert': 'Désert Brûlant',
+  'world.snow': 'Lac Givré',
+  'world.volcano': 'Montagne de Magma',
+  'enemy.ranger': 'Garde forestier',
+  'enemy.knight': 'Chevalier',
+  'enemy.viking': 'Viking des montagnes',
+  'enemy.nomad': 'Nomade du désert',
+  'enemy.yeti': 'Yéti des neiges',
+  'enemy.golem': 'Golem de feu',
+  'boss.oakheart.name': 'Chêne-Cœur, chef des gardes',
+  'boss.oakheart.intro': 'Personne ne traverse ma forêt ! Esquive donc TROIS flèches à la fois.',
+  'boss.ironclad.name': 'Sire Cuirassé',
+  'boss.ironclad.intro': 'Mes boulets de canon ne ratent jamais une fête. Cache-toi derrière les créneaux !',
+  'boss.stormbeard.name': 'Jarl Barbe-Tempête',
+  'boss.stormbeard.intro': 'Le vent est mon ami et ma hache est ÉNORME. Prêt ?',
+  'boss.sandking.name': 'Le Roi des Sables',
+  'boss.sandking.intro': 'Mes boomerangs jumeaux reviennent toujours. Et toi ?',
+  'boss.frostfang.name': 'Croc-Givre, roi des yétis',
+  'boss.frostfang.intro': 'ROAR ! Place à la bataille de boules de neige géantes !',
+  'boss.magmor.name': 'Magmor, le golem de feu',
+  'boss.magmor.intro': 'Ça chauffe ! Mes météores font tout fondre… sauf le fun.',
+  'intro.level': 'Niveau {n}',
+  'intro.boss': 'Combat de boss !',
+  'intro.vs': 'VS',
+  'intro.wind': 'Vent',
+  'intro.calm': 'Calme',
+  'intro.fight': 'Combattre !',
+  'intro.weapon': 'Ton arme',
+  'intro.try': 'Essayer {w} pour ce duel',
+  'intro.tryAd': 'Regarde une pub pour essayer {w} pour ce duel',
+  'intro.tutorial': 'Tire vers l’arrière et relâche pour tirer. Vise la tête pour plus de dégâts !',
+  'hud.yourTurn': 'À toi !',
+  'hud.enemyTurn': 'Tour de l’ennemi',
+  'hud.p1Turn': 'Joueur 1',
+  'hud.p2Turn': 'Joueur 2',
+  'hud.you': 'Toi',
+  'hud.p1': 'J1',
+  'hud.p2': 'J2',
+  'hud.wave': 'Vague {n}',
+  'hud.headshot': 'EN PLEINE TÊTE !',
+  'hud.ko': 'K.O. !',
+  'hud.timeout': 'Trop lent !',
+  'hud.miss': 'Raté !',
+  'hud.fall': 'Oups !',
+  'hud.dragHint': 'Tire vers l’arrière et relâche',
+  'pause.title': 'Pause',
+  'pause.resume': 'Reprendre',
+  'pause.restart': 'Recommencer',
+  'pause.quit': 'Quitter',
+  'result.win': 'Victoire !',
+  'result.lose': 'Défaite',
+  'result.p1wins': 'Le joueur 1 gagne !',
+  'result.p2wins': 'Le joueur 2 gagne !',
+  'result.coins': '+{n} pièces',
+  'result.double': 'Doubler les pièces',
+  'result.doubled': 'Pièces doublées !',
+  'result.next': 'Suivant',
+  'result.retry': 'Rejouer',
+  'result.map': 'Carte',
+  'result.menu': 'Menu',
+  'result.revive': 'Revivre et continuer',
+  'result.shots': 'Tirs : {n} (par {p})',
+  'result.hp': 'PV restants : {n}',
+  'result.unlocked': 'Nouveau monde débloqué : {w} !',
+  'result.rematch': 'Revanche',
+  'result.waves': 'Ennemis vaincus : {n}',
+  'result.best': 'Record : {n}',
+  'result.newBest': 'Nouveau record !',
+  'result.continue': 'Continuer',
+  'result.adFail': 'Pas de pub disponible pour le moment — pas de souci !',
+  'shop.title': 'Boutique',
+  'shop.weapons': 'Armes',
+  'shop.hats': 'Chapeaux',
+  'shop.colors': 'Couleurs',
+  'shop.equip': 'Équiper',
+  'shop.equipped': 'Équipé',
+  'shop.buy': 'Acheter',
+  'shop.requires': 'Finis le monde {n}',
+  'settings.title': 'Réglages',
+  'settings.sound': 'Effets sonores',
+  'settings.music': 'Musique',
+  'settings.lang': 'Langue',
+  'settings.auto': 'Auto',
+  'settings.on': 'Oui',
+  'settings.off': 'Non',
+  'versus.title': '2 joueurs',
+  'versus.pick': 'Choisis un monde',
+  'versus.start': 'Lancer le duel',
+  'versus.hint': 'Jouez chacun votre tour sur le même appareil.',
+  'endless.title': 'Sans fin',
+  'endless.hint': 'Bats un maximum d’ennemis. Tu récupères un peu de PV après chaque victoire.',
+  'endless.start': 'Commencer',
+  'weapon.bow': 'Arc',
+  'weapon.axe': 'Hache de lancer',
+  'weapon.spear': 'Lance',
+  'weapon.bomb': 'Bombe',
+  'weapon.boomerang': 'Boomerang',
+  'weapon.staff': 'Bâton magique',
+  'weapon.volley': 'Triple flèche',
+  'weapon.cannon': 'Boulet de canon',
+  'weapon.greataxe': 'Hache géante',
+  'weapon.twinrang': 'Boomerangs jumeaux',
+  'weapon.snowball': 'Boule de neige géante',
+  'weapon.meteor': 'Météore',
+  'wdesc.bow': 'Rapide et précis. Les flèches restent plantées !',
+  'wdesc.axe': 'Tournoie dans les airs. Gros dégâts.',
+  'wdesc.spear': 'Lourde et droite. Le vent la dévie à peine.',
+  'wdesc.bomb': 'Vole en cloche et explose. Idéale contre les abris.',
+  'wdesc.boomerang': 'Fait demi-tour. Plane sur l’air.',
+  'wdesc.staff': 'Éclair magique. Ignore le vent !',
+  'hat.none': 'Sans chapeau',
+  'hat.cap': 'Casquette',
+  'hat.headband': 'Bandeau',
+  'hat.tophat': 'Haut-de-forme',
+  'hat.pirate': 'Chapeau de pirate',
+  'hat.wizard': 'Chapeau de magicien',
+  'hat.viking': 'Casque viking',
+  'hat.crown': 'Couronne',
+  'hat.propeller': 'Casquette à hélice',
+  'color.blue': 'Bleu',
+  'color.red': 'Rouge',
+  'color.green': 'Vert',
+  'color.purple': 'Violet',
+  'color.orange': 'Orange',
+  'color.pink': 'Rose',
+  'color.black': 'Ombre',
+  'color.gold': 'Or',
+};
 
-export function detectLanguage(preferred: readonly string[] | undefined): string {
-  for (const tag of preferred ?? []) {
-    const code = tag.toLowerCase().split('-')[0] ?? '';
-    if (code in LOCALES) return code;
+export const DICTS = { en, fr };
+export type LangCode = keyof typeof DICTS;
+
+let current: LangCode = 'en';
+
+export function detectLang(...candidates: Array<string | null | undefined>): LangCode {
+  for (const c of candidates) {
+    if (!c) continue;
+    const l = c.toLowerCase().slice(0, 2);
+    if (l === 'fr' || l === 'en') return l;
   }
-  return DEFAULT_LANG;
+  return 'en';
 }
 
-let current: Locale = LOCALES[DEFAULT_LANG] as Locale;
-
-export function setLanguage(code: string): void {
-  current = LOCALES[code] ?? (LOCALES[DEFAULT_LANG] as Locale);
-  if (typeof document !== 'undefined') document.documentElement.lang = current.meta.code;
+export function setLang(l: LangCode): void {
+  current = l;
+  if (typeof document !== 'undefined') document.documentElement.lang = l;
 }
+export const getLang = (): LangCode => current;
 
-export function lang(): string {
-  return current.meta.code;
-}
-
-const fallback = (): Locale => LOCALES[DEFAULT_LANG] as Locale;
-
-export function t(key: string, vars: Record<string, string | number> = {}): string {
-  const template = current.ui[key] ?? fallback().ui[key] ?? key;
-  return template.replace(/\{(\w+)\}/g, (_, k: string) => String(vars[k] ?? `{${k}}`));
-}
-
-type Section = 'recipes' | 'ingredients' | 'machines' | 'decor' | 'achievements' | 'expansions' | 'expansionInfo' | 'guests';
-export function name(section: Section, id: string): string {
-  return current[section][id] ?? fallback()[section][id] ?? id;
+export function t(key: Key, vars: Record<string, string | number> = {}): string {
+  let s: string = DICTS[current][key] ?? en[key] ?? key;
+  for (const [k, v] of Object.entries(vars)) s = s.replace(`{${k}}`, String(v));
+  return s;
 }

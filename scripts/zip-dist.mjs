@@ -1,11 +1,11 @@
-// Packs dist/ into cozy-cafe-crazygames.zip (index.html at the zip root,
+// Packs dist/ into stick-duel-crazygames.zip (index.html at the zip root,
 // as CrazyGames expects). Usage: npm run build:crazygames && npm run zip
 import { readdirSync, readFileSync, statSync, writeFileSync, existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { zipSync } from 'fflate';
 
 const dist = 'dist';
-const out = process.argv[2] ?? 'cozy-cafe-crazygames.zip';
+const out = process.argv[2] ?? 'stick-duel-crazygames.zip';
 if (!existsSync(join(dist, 'index.html'))) {
   console.error('dist/index.html not found — run a build first.');
   process.exit(1);

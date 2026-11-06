@@ -1,31 +1,30 @@
+import '@fontsource/fredoka/latin-600.css';
+import '@fontsource/fredoka/latin-700.css';
+import '@fontsource/fredoka/latin-ext-700.css';
 import './style.css';
-import { App } from './ui/app';
-import { fitToScreen } from './ui/fit';
+import { loadSave } from './game/save';
 import { NoopPlatform, type Platform } from './platform/ads';
 import { CrazyGamesPlatform } from './platform/crazygames';
-import { Sound } from './platform/audio';
 import { setStorageBackend } from './platform/storage';
+import { App } from './ui/app';
 
 async function boot(): Promise<void> {
-  const root = document.getElementById('app');
-  if (!root) return;
-  fitToScreen(root);
-  const sound = new Sound(false);
-  const platform: Platform =
-    import.meta.env.MODE === 'crazygames'
-      ? new CrazyGamesPlatform({ onAdStart: () => sound.pauseForAd(), onAdEnd: () => sound.resumeAfterAd() })
-      : new NoopPlatform();
+  const root = document.getElementById('app') as HTMLElement;
+  let app: App | null = null;
+  const hooks = { onAdStart: () => app?.onAdStart(), onAdEnd: () => app?.onAdEnd() };
+  const platform: Platform = window.CrazyGames?.SDK ? new CrazyGamesPlatform(hooks) : new NoopPlatform();
   await platform.init();
   platform.loadingStart();
-  // on CrazyGames, progress is saved through the SDK data module (synced to the player's account)
   setStorageBackend(platform.storage());
-
-  const params = new URLSearchParams(window.location.search);
-  const seedParam = params.get('seed');
-  const seed = seedParam && /^\d+$/.test(seedParam) ? Number(seedParam) : undefined;
-
-  const app = new App({ root, platform, sound, seed });
-  app.start();
+  const save = loadSave();
+  try {
+    await Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 1500))]);
+    await Promise.all([document.fonts.load('700 20px Fredoka'), document.fonts.load('600 20px Fredoka')]);
+  } catch {
+    /* fonts are optional */
+  }
+  app = new App(root, save, platform);
+  app.title();
   platform.loadingStop();
 }
 

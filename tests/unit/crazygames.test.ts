@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { CrazyGamesPlatform, adErrorCode } from '../../src/platform/crazygames';
 import { NoopPlatform } from '../../src/platform/ads';
 import { readJSON, setStorageBackend, writeJSON } from '../../src/platform/storage';
-import { zoomFor } from '../../src/ui/fit';
+import { GameplayTracker, MidgameThrottle } from '../../src/platform/ads';
 
 type Callbacks = { adStarted?: () => void; adFinished?: () => void; adError?: (e: unknown) => void };
 
@@ -119,13 +119,27 @@ describe('CrazyGames SDK v3 adapter', () => {
   });
 });
 
-describe('landscape scaling', () => {
-  it('scales 16:9 screens to the 800×450 design, never portrait', () => {
-    expect(zoomFor(800, 450)).toBe(1);
-    expect(zoomFor(1920, 1080)).toBeCloseTo(2.4);
-    expect(zoomFor(1366, 768)).toBeCloseTo(768 / 450);
-    expect(zoomFor(907, 510)).toBeCloseTo(510 / 450);
-    expect(zoomFor(390, 844)).toBe(1);
-    expect(zoomFor(1024, 768)).toBeCloseTo(1024 / 800); // 4:3 tablet: limited by width
+describe('ad pacing helpers', () => {
+  it('midgame ads are throttled from session start', () => {
+    let now = 0;
+    const th = new MidgameThrottle(() => now, 120_000);
+    expect(th.canShow()).toBe(false);
+    now = 121_000;
+    expect(th.canShow()).toBe(true);
+    th.markShown();
+    expect(th.canShow()).toBe(false);
+  });
+  it('gameplayStart/Stop are never duplicated', () => {
+    const calls: string[] = [];
+    const p = new NoopPlatform();
+    p.gameplayStart = () => void calls.push('start');
+    p.gameplayStop = () => void calls.push('stop');
+    const tr = new GameplayTracker(p);
+    tr.start();
+    tr.start();
+    tr.stop();
+    tr.stop();
+    tr.start();
+    expect(calls).toEqual(['start', 'stop', 'start']);
   });
 });

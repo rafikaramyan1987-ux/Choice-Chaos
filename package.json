@@ -1,9 +1,9 @@
 {
-  "name": "cozy-cafe",
+  "name": "stick-duel",
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Cozy Caf\u00e9 \u2014 a relaxing mobile-first caf\u00e9 cooking game.",
+  "description": "Stick Duel — a juicy turn-based 2D physics duel with stick-figure ragdolls, six worlds and six bosses.",
   "license": "UNLICENSED",
   "scripts": {
     "dev": "vite",
@@ -17,7 +17,8 @@
     "test:e2e": "playwright test",
     "check": "npm run lint && npm run typecheck && npm run test",
     "covers": "node scripts/covers.mjs",
-    "videos": "node scripts/videos.mjs"
+    "videos": "node scripts/videos.mjs",
+    "qa": "node scripts/qa-shots.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -30,6 +31,10 @@
     "typescript": "~5.9",
     "typescript-eslint": "^8.72.1",
     "vite": "^8.3.5",
+    "vite-plugin-singlefile": "^2.3.4",
     "vitest": "^5.1.0"
+  },
+  "dependencies": {
+    "planck": "^1.5.1"
   }
 }

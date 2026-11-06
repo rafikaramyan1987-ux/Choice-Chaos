@@ -1,5 +1,5 @@
 import { Circle, Polygon, World, type Body } from 'planck';
-import { applyError, chooseWeapon, perceivedWind, solveAim } from '../core/ai';
+import { applyError, chooseWeapon, perceivedWind, solveAim, trace } from '../core/ai';
 import { blastDamage, hitDamage, type Zone } from '../core/damage';
 import { distToSegSq, makeBlocker, segCircle, segShape, type SegHit } from '../core/geometry';
 import { clamp, lerp, wrapAngle, type Vec } from '../core/math';
@@ -87,7 +87,9 @@ export type DuelEvent =
 export type Phase = 'intro' | 'aim' | 'flight' | 'settle' | 'over';
 
 export const TURN_SECONDS = 20;
-const FALL_DAMAGE = 10;
+/** Extra hit radius (m) for human players' projectiles. */
+export const AIM_ASSIST = 0.12;
+const FALL_DAMAGE = 6;
 
 export class Fighter {
   hp: number;
@@ -102,7 +104,7 @@ export class Fighter {
   shots = 0;
   hits = 0;
   headshots = 0;
-  breath = Math.random() * 6;
+  breath = 0;
   /** Keep the aiming pose outside of its turn (cover renders). */
   showAim = false;
 
@@ -192,7 +194,7 @@ export class Duel {
     for (const s of this.solids) this.addStatic(s);
     const mk = (side: Side, setup: FighterSetup, spot: Vec) => {
       const rag = new Ragdoll(this.world, spot.x, spot.y, side === 0 ? 1 : -1, setup.scale ?? 1, -(side + 1), GRAVITY);
-      rag.homeSpring = level.friction < 0.2 ? 0.35 : 1;
+      rag.homeSpring = level.friction < 0.2 ? 0.7 : 1;
       return new Fighter(side, setup, rag);
     };
     this.fighters = [mk(0, opt.left, level.playerSpot), mk(1, opt.right, level.enemySpot)];
@@ -316,7 +318,7 @@ export class Duel {
     const weapon = chooseWeapon(f.setup.weapons, f.weapon, L.skill, this.rng, covered);
     f.weapon = weapon;
     const w = WEAPONS[weapon];
-    const aimHead = this.rng.chance(L.skill * 0.35);
+    const aimHead = L.ai.headshots && this.rng.chance(L.skill * 0.35);
     const t = foe.center();
     const target = aimHead ? { x: foe.rag.head.getPosition().x, y: foe.rag.head.getPosition().y } : { x: t.x, y: t.y + 0.05 };
     const restAngle = f.restAngle();
@@ -327,6 +329,19 @@ export class Duel {
     // the launch point depends on the angle: refine once from the solved angle
     sol = solveAim({ from: f.launchPoint(sol.angle), target, weapon: w, wind, blocked });
     if (!this.aiPerfect) sol = applyError(sol, w, L.skill, this.rng);
+    // gentle levels: the AI's first shot always falls short or long
+    if (L.ai.missFirst && f.shots === 0 && !this.aiPerfect) {
+      // pick a shot that visibly falls short (or flies long), checked against the real flight
+      const prob = { from: f.launchPoint(sol.angle), target: foe.center(), weapon: w, wind: this.wind, blocked };
+      // the body reaches ~1.2 m below and ~0.8 m above the torso centre
+      for (const k of [0.7, 0.6, 0.5, 1.35, 1.5]) {
+        const speed = clamp(sol.speed * k, w.speedMin, w.speedMax);
+        if (trace(prob, sol.angle, speed).best > 2.2) {
+          sol = { ...sol, speed };
+          break;
+        }
+      }
+    }
     const think = lerp(1.3, 0.8, L.skill) + this.rng.range(0, 0.4);
     this.aiPlan = { at: think, fireAt: think + 0.7, angle: sol.angle, speed: sol.speed, weapon };
   }
@@ -506,6 +521,8 @@ export class Duel {
     const bx = p.f.x;
     const by = p.f.y;
     const pr = projectileRadius(p.w);
+    // a little aim assist for human players (kids): their shots hit a slightly larger body
+    const pad = this.fighters[p.owner].setup.ai ? 0 : AIM_ASSIST;
     // fighters (never your own projectile)
     for (const f of this.fighters) {
       if (f.side === p.owner) continue;
@@ -514,11 +531,11 @@ export class Duel {
         let hit: boolean;
         if (sp.circle) {
           const c = part.body.getPosition();
-          hit = !!segCircle(ax, ay, bx, by, c, sp.circle + pr);
+          hit = !!segCircle(ax, ay, bx, by, c, sp.circle + pr + pad);
         } else {
           const t0 = part.body.getWorldPoint({ x: 0, y: -sp.hh });
           const t1 = part.body.getWorldPoint({ x: 0, y: sp.hh });
-          const r = sp.hw + pr + 0.02;
+          const r = sp.hw + pr + 0.02 + pad;
           hit = distToSegSq(bx, by, t0.x, t0.y, t1.x, t1.y) < r * r;
         }
         if (hit) {
@@ -562,11 +579,12 @@ export class Duel {
       this.explode(p, x, y);
       return;
     }
-    const zone = Ragdoll.zoneOf(partName);
-    const speed = Math.hypot(p.f.vx, p.f.vy);
-    const dmg = hitDamage(p.w, zone, speed);
-    const part = f.rag.byName[partName];
     const shooter = this.fighters[p.owner];
+    // gentle levels: AI hits never count as headshots
+    const zone = Ragdoll.zoneOf(partName) === 'head' && shooter.setup.ai && !this.level.ai.headshots ? 'torso' : Ragdoll.zoneOf(partName);
+    const speed = Math.hypot(p.f.vx, p.f.vy);
+    const dmg = this.scaleDamage(shooter, hitDamage(p.w, zone, speed));
+    const part = f.rag.byName[partName];
     shooter.hits++;
     if (zone === 'head') shooter.headshots++;
     const k = p.w.knockback * f.rag.totalMass * 0.16 / Math.max(1, f.rag.scale * 0.9);
@@ -587,6 +605,13 @@ export class Duel {
     this.shake = Math.max(this.shake, zone === 'head' ? 0.7 : 0.45);
     if (zone === 'head' || f.ko) this.slowmo = f.ko ? 1.1 : 0.7;
     this.emit({ type: 'hit', side: f.side, dmg, zone, x, y, weapon: p.w, ko: f.ko });
+  }
+
+  /** AI damage is scaled per level (softer early on); human hits set the duel pace (not in 2-player mode). */
+  private scaleDamage(shooter: Fighter, dmg: number): number {
+    if (dmg <= 0) return dmg;
+    const k = shooter.setup.ai ? this.level.ai.damage : this.opt.mode === 'versus' ? 1 : this.level.playerDamage;
+    return Math.max(1, Math.round(dmg * k));
   }
 
   private damage(f: Fighter, dmg: number): void {
@@ -634,7 +659,7 @@ export class Duel {
         const c = part.body.getPosition();
         d = Math.min(d, Math.hypot(c.x - x, c.y - y));
       }
-      const dmg = blastDamage(w, d);
+      const dmg = this.scaleDamage(this.fighters[p.owner], blastDamage(w, d));
       if (dmg <= 0) continue;
       const k = (1 - d / ex.radius) * ex.impulse * 0.12;
       for (const part of f.rag.parts) {

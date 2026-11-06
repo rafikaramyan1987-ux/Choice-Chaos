@@ -59,7 +59,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
   cannon: { ...base, id: 'cannon', look: 'bomb', speedMax: 19, speedMin: 6, gravity: 1, windScale: 0.5, damage: 10, knockback: 4, spin: 3, explode: { radius: 2.3, damage: 26, impulse: 9 }, size: 1.5, price: -1 },
   greataxe: { ...base, id: 'greataxe', look: 'axe', speedMax: 19, speedMin: 6, gravity: 1.1, windScale: 0.4, damage: 25, knockback: 8, spin: 12, sticks: true, size: 1.5, price: -1 },
   twinrang: { ...base, id: 'twinrang', look: 'boomerang', speedMax: 21, speedMin: 8, gravity: 0.45, windScale: 0.5, boomerang: 5.5, damage: 17, knockback: 3.5, spin: 22, count: 2, spread: 0.09, price: -1 },
-  snowball: { ...base, id: 'snowball', look: 'snowball', speedMax: 20, speedMin: 6, gravity: 1, windScale: 0.7, damage: 26, knockback: 6.5, spin: 6, size: 1.7, price: -1 },
+  snowball: { ...base, id: 'snowball', look: 'snowball', speedMax: 20, speedMin: 6, gravity: 1, windScale: 0.7, damage: 26, knockback: 4.5, spin: 6, size: 1.7, price: -1 },
   meteor: { ...base, id: 'meteor', look: 'meteor', speedMax: 19, speedMin: 6, gravity: 0.95, windScale: 0.3, damage: 10, knockback: 4, spin: 5, explode: { radius: 2.3, damage: 28, impulse: 9 }, size: 1.5, price: -1, sound: 'magic' },
 };
 

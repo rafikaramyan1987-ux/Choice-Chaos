@@ -3,10 +3,10 @@ import { audio } from '../audio/sfx';
 import { coinsFor, starsFor } from '../core/damage';
 import { clamp, len } from '../core/math';
 import { Rng } from '../core/rng';
-import { pullToAim } from '../core/trajectory';
+import { launch, pullToAim, SIM_DT, speedFor, step } from '../core/trajectory';
 import { PLAYER_WEAPONS, WEAPONS, type WeaponId } from '../core/weapons';
 import { Duel, Fighter, type DuelEvent, type FighterSetup, type Mode, type Side } from '../game/duel';
-import { generateLevel, type LevelDef } from '../game/levels';
+import { endlessLevel, generateLevel, type LevelDef } from '../game/levels';
 import {
   buy,
   COLOR_PRICE,
@@ -27,6 +27,7 @@ import {
   type HatId,
   type SaveData,
   type ShopItem,
+  type TipId,
 } from '../game/progress';
 import { Ragdoll } from '../game/ragdoll';
 import { writeSave } from '../game/save';
@@ -79,6 +80,9 @@ export class App {
   speed = 1;
   /** Stops the simulation but keeps rendering (cover renders). */
   freeze = false;
+  /** First-time tutorial running (level 1-1). */
+  private tutorialActive = false;
+  private tutEl: HTMLElement | null = null;
 
   constructor(
     private readonly root: HTMLElement,
@@ -505,9 +509,77 @@ export class App {
     this.resultShown = false;
     this.buildHud();
     this.hud.classList.remove('hidden');
+    const s = this.session;
+    this.tutorialActive = s.mode === 'adventure' && s.world === 1 && s.level === 1 && !this.save.tutorial;
     duel.start();
     this.tracker.start();
-    if (!this.save.tutorial) this.flash(t('hud.dragHint'), 'hint', 2600);
+    if (!this.save.tutorial && !this.tutorialActive) this.flash(t('hud.dragHint'), 'hint', 2600);
+  }
+
+  // ───────────── tutorial & tips ─────────────
+
+  /** Level 1-1, first time: an animated hand shows the drag, a glowing path shows a good shot. */
+  private showTutorial(): void {
+    const duel = this.duel;
+    const scene = this.scene;
+    if (!duel || !scene || !duel.humanAiming) return;
+    const shot = duel.autoShot(false);
+    if (!shot) return;
+    const me = duel.current;
+    const foe = duel.other(me.side);
+    // the ghost path: the real flight of that shot, up to the enemy
+    const f = launch(me.launchPoint(shot.angle), shot.angle, speedFor(shot.power, me.def));
+    const pts: Array<{ x: number; y: number }> = [];
+    const fx = foe.center().x;
+    for (let i = 0; i < 240 * 4 && (f.x - fx) * me.facing < 0; i++) {
+      step(f, me.def, { wind: duel.wind }, SIM_DT);
+      if (i % 12 === 0) pts.push({ x: f.x, y: f.y });
+    }
+    scene.ghost = pts;
+    scene.fullPreview = true;
+    // the hand: presses beside the hero and pulls back along the right drag
+    const dpr = this.view.dpr;
+    const sh = me.rag.shoulder();
+    const [sx, sy] = scene.toScreen(sh.x, sh.y, this.view);
+    const pull = shot.power * this.maxPull();
+    const x0 = clamp(sx / dpr + 110, 40, window.innerWidth - 60);
+    const y0 = clamp(sy / dpr - 10, 120, window.innerHeight - 160);
+    const dx = -Math.cos(shot.angle) * pull;
+    const dy = -Math.sin(shot.angle) * pull;
+    this.tutEl?.remove();
+    this.tutEl = h('div.tutorial', {},
+      h('div.tutbubble', {}, h('b', {}, t('tut.drag')), h('span', {}, t('tut.follow'))),
+      h('div.hand', { style: `left:${x0}px;top:${y0}px;--dx:${dx.toFixed(0)}px;--dy:${dy.toFixed(0)}px`, html: HAND_SVG }),
+      h('div.handtrail', { style: `left:${x0}px;top:${y0}px;--dx:${dx.toFixed(0)}px;--dy:${dy.toFixed(0)}px` }),
+      h<'button'>('button.btn.small.skip#skip-tutorial', { onclick: () => this.endTutorial() }, t('tut.skip')),
+    );
+    this.hud.append(this.tutEl);
+  }
+
+  private endTutorial(): void {
+    this.tutorialActive = false;
+    this.tutEl?.remove();
+    this.tutEl = null;
+    if (this.scene) {
+      this.scene.ghost = null;
+      this.scene.fullPreview = false;
+    }
+    if (!this.save.tutorial) {
+      this.save.tutorial = true;
+      this.persist();
+    }
+  }
+
+  /** A short tip, shown only the first time (saved). */
+  private tip(id: TipId, text: string, delay = 0): void {
+    if (this.save.tips.includes(id) || this.session?.attract) return;
+    this.save.tips.push(id);
+    this.persist();
+    window.setTimeout(() => {
+      const el = h('div.tipbubble', { onclick: () => el.remove(), role: 'status' }, text);
+      this.hud.append(el);
+      window.setTimeout(() => el.remove(), 4800);
+    }, delay);
   }
 
   // ───────────── HUD ─────────────
@@ -634,10 +706,7 @@ export class App {
         snd(e.weapon.sound, { pitch: 0.9 + Math.random() * 0.2 });
         if (e.weapon.spin) snd('spin');
         if (!quiet) this.refreshWeapons();
-        if (e.side === 0 && !this.save.tutorial && !quiet) {
-          this.save.tutorial = true;
-          this.persist();
-        }
+        if (e.side === 0 && !quiet && (this.tutorialActive || !this.save.tutorial)) this.endTutorial();
         break;
       case 'hit': {
         const head = e.zone === 'head';
@@ -655,6 +724,7 @@ export class App {
         if (e.weapon.look === 'snowball') fx.burst('snow', e.x, e.y, 18, { speed: 4, size: 0.07, color: '#ffffff', life: 0.8, g: 6 });
         if (e.weapon.look === 'bolt') fx.burst('magic', e.x, e.y, 16, { speed: 4, size: 0.08, color: ['#d6a8ff', '#ffffff'], life: 0.6, g: 0 });
         if (!quiet) this.updateHud();
+        if (!quiet && e.side === 1 && this.session?.mode !== 'versus') this.tip('head', t('tip.head'), head ? 1300 : 700);
         break;
       }
       case 'blast':
@@ -713,6 +783,11 @@ export class App {
         else if (e.side === 0) this.toast(t('hud.yourTurn'), 'p1');
         else this.toast(t('hud.enemyTurn'), 'p2');
         if (!duel.fighters[e.side].setup.ai) snd('turn');
+        if (e.side === 0 && this.tutorialActive) window.setTimeout(() => this.tutorialActive && this.showTutorial(), 350);
+        if (e.side === 0 && this.session?.mode !== 'versus') {
+          if (Math.abs(duel.wind) >= 0.3) this.tip('wind', t('tip.wind'), 900);
+          else if (duel.fighters[0].setup.weapons.length > 1) this.tip('weapons', t('tip.weapons'), 900);
+        }
         if (Math.abs(duel.wind) > 1.5 && duel.level.wind.gust > 0) snd('wind', { volume: 0.6 });
         break;
       case 'timeout':
@@ -977,10 +1052,9 @@ export class App {
   }
 
   private endlessWave(wave: number, hp: number): void {
-    const rng = new Rng(Date.now() + wave);
-    const world = 1 + rng.int(0, furthestWorld(this.save) - 1);
-    const level = clamp(2 + Math.floor(wave * 0.8), 2, 9);
-    const L = generateLevel(world, level, { seed: rng.int(1, 1e9), forceBoss: false });
+    const L = endlessLevel(wave, furthestWorld(this.save), new Rng(Date.now() + wave));
+    const world = L.world.index;
+    const level = L.level;
     this.session = { mode: 'endless', world, level, L, tryWeapon: null, revived: false, wave, endlessHp: hp, attract: false };
     this.prepareDuel();
     this.showIntro();
@@ -1229,6 +1303,8 @@ export class App {
     return d.fire();
   }
 }
+
+const HAND_SVG = `<svg viewBox="0 0 64 64" width="64" height="64" aria-hidden="true"><path d="M24 30V10a5 5 0 0 1 10 0v16l2-1a5 5 0 0 1 6 2l1-1a5 5 0 0 1 7 3l1 0a5 5 0 0 1 6 5v9c0 9-6 17-16 17h-6c-6 0-10-3-13-8l-8-13a5 5 0 0 1 8-6z" fill="#fff" stroke="#1e1a2b" stroke-width="4" stroke-linejoin="round"/></svg>`;
 
 /** Dashed trail linking the level nodes in order (drawn behind them). */
 function drawPath(path: HTMLElement): void {

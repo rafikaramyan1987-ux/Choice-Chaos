@@ -30,28 +30,42 @@ export class Camera {
   /** Frames both fighters (and the flying projectile) with margins. */
   update(duel: Duel, view: View, dt: number, snap = false): void {
     const [a, b] = duel.fighters;
-    let minX = Math.min(a.rag.homeX, b.rag.homeX) - 2.6;
-    let maxX = Math.max(a.rag.homeX, b.rag.homeX) + 2.6;
+    // phone portrait: the width limits the zoom, so keep the side margins tight
+    const portrait = view.h > view.w * 1.15;
+    const side = portrait ? 0.8 : 2.6;
+    let minX = Math.min(a.rag.homeX, b.rag.homeX) - side;
+    let maxX = Math.max(a.rag.homeX, b.rag.homeX) + side;
     let minY = Math.min(a.rag.footY - 2.6 * a.rag.scale, b.rag.footY - 2.6 * b.rag.scale) - 0.6;
     let maxY = Math.max(a.rag.footY, b.rag.footY) + 1.4;
     // show the lava / icy lake / ground when it is close below the fighters
     const floor = duel.level.floor;
     if (floor.kind !== 'abyss' && floor.kind !== 'courtyard' && floor.y - maxY < 6) maxY = Math.max(maxY, floor.y + 0.9);
     for (const p of duel.projectiles) {
-      minX = Math.min(minX, p.f.x - 1.5);
-      maxX = Math.max(maxX, p.f.x + 1.5);
+      minX = Math.min(minX, p.f.x - (portrait ? 0.6 : 1.5));
+      maxX = Math.max(maxX, p.f.x + (portrait ? 0.6 : 1.5));
       minY = Math.min(minY, Math.max(p.f.y - 1.5, maxY - 30));
     }
     const usableH = view.h - view.padTop - view.padBottom;
     const zoom = clamp(Math.min(view.w / (maxX - minX), usableH / (maxY - minY)), 6 * view.dpr, 90 * view.dpr);
     const viewHWorld = usableH / zoom;
     const extra = Math.max(0, viewHWorld - (maxY - minY));
-    // spare vertical room goes mostly above (sky for the arcs)
+    // spare vertical room: landscape keeps it mostly above (sky for the arcs);
+    // portrait puts more of it below (platforms, ground) so the sky isn't empty
     let cy = (minY + maxY) / 2 - extra * 0.28;
-    // never show far below the floor
-    const bottom = cy + viewHWorld / 2;
-    const floorLimit = duel.level.floor.y + 3.5;
-    if (bottom > floorLimit) cy -= bottom - floorLimit;
+    if (portrait) {
+      // width-limited: centre the fighters themselves a little above the middle,
+      // showing their platforms below rather than a tall empty sky
+      const top = Math.min(a.rag.footY - 2.4 * a.rag.scale, b.rag.footY - 2.4 * b.rag.scale);
+      const feet = Math.max(a.rag.footY, b.rag.footY);
+      cy = (top + feet) / 2 + viewHWorld * 0.07;
+      // keep a high arc in view
+      for (const p of duel.projectiles) cy = Math.min(cy, p.f.y - 1 + viewHWorld / 2);
+    } else {
+      // never show far below the floor
+      const bottom = cy + viewHWorld / 2;
+      const floorLimit = duel.level.floor.y + 3.5;
+      if (bottom > floorLimit) cy -= bottom - floorLimit;
+    }
     const cx = (minX + maxX) / 2;
     // centre of the usable band
     const offsetY = (view.padTop - view.padBottom) / 2 / zoom;
@@ -89,6 +103,10 @@ export class SceneRenderer {
   time = 0;
   /** Hide aim UI (cover renders). */
   clean = false;
+  /** Tutorial: the glowing path of a good first shot. */
+  ghost: Array<{ x: number; y: number }> | null = null;
+  /** Tutorial: show the whole aim preview instead of its start. */
+  fullPreview = false;
 
   constructor(private duel: Duel) {
     this.backdrop = new Backdrop(duel.level.world.id, duel.level.seed % 1000);
@@ -105,6 +123,8 @@ export class SceneRenderer {
     this.theme = this.backdrop.theme;
     this.cache.clear();
     this.fx.list = [];
+    this.ghost = null;
+    this.fullPreview = false;
   }
 
   toScreen = (x: number, y: number, view: View): [number, number] => [
@@ -160,6 +180,7 @@ export class SceneRenderer {
     for (const s of duel.stuckWorld) drawStuck(ctx, s, s.x, s.y, s.a, lw, this.time);
 
     const aimPhase = duel.phase === 'aim';
+    if (this.ghost && !this.clean) this.drawGhost(ctx, this.ghost, px);
     for (const f of duel.fighters) drawFighter(ctx, f, lw, this.time, (aimPhase && duel.current === f) || f.showAim);
     if (!this.clean && aimPhase && duel.current.aim) this.drawAim(ctx, duel.current, lw, px);
     if (!this.clean && aimPhase) this.drawTurnMarker(ctx, duel.current, lw);
@@ -895,7 +916,7 @@ export class SceneRenderer {
     const w = f.def;
     const speed = w.speedMin + (w.speedMax - w.speedMin) * aim.power;
     const from = f.launchPoint(aim.angle);
-    const dots = previewDots(from, aim.angle, speed, w, this.duel.level.preview * (0.5 + aim.power * 0.7));
+    const dots = previewDots(from, aim.angle, speed, w, this.fullPreview ? 2.6 : this.duel.level.preview * (0.5 + aim.power * 0.7));
     dots.forEach((d, i) => {
       const k = 1 - i / dots.length;
       ctx.globalAlpha = 0.35 + k * 0.65;
@@ -930,6 +951,20 @@ export class SceneRenderer {
     ctx.beginPath();
     ctx.arc(s.x, s.y, R + 0.12, a0, a0 + spanA);
     ctx.stroke();
+  }
+
+  private drawGhost(ctx: Ctx, pts: Array<{ x: number; y: number }>, px: number): void {
+    const pulse = 0.55 + Math.sin(this.time * 5) * 0.25;
+    ctx.fillStyle = `rgba(255,214,61,${pulse})`;
+    ctx.strokeStyle = 'rgba(30,26,43,0.5)';
+    ctx.lineWidth = px * 1.5;
+    pts.forEach((p, i) => {
+      if (i % 2) return;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 0.09, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    });
   }
 
   private drawTurnMarker(ctx: Ctx, f: Fighter, lw: number): void {

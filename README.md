@@ -31,7 +31,12 @@ No blood or gore — sparks, stars and comic damage numbers instead (aimed at PE
   shrinks with the level — it is never perfect.
 - English + French (auto-detected, switchable in Settings). Sound + music toggles.
 - Desktop (mouse/keyboard) and mobile (touch), landscape and portrait — the camera always frames both
-  fighters. `devicePixelRatio` aware (capped at 2 for performance).
+  fighters (tighter in phone portrait). `devicePixelRatio` aware (capped at 2 for performance).
+- **First-time tutorial** on level 1: an animated hand shows the drag, the first shot follows a glowing
+  path, and short tips appear the first time something happens (a hit, wind, several weapons).
+  Skippable, shown once.
+- **Gentle start:** on levels 1–3 the AI never headshots, always misses its first shot and hits softly;
+  nothing stands near the player's line of fire.
 
 ## Controls
 
@@ -83,6 +88,15 @@ npm run build        # dist/index.html (single file)
 npm run test:e2e     # Playwright smoke test against the build
 npm run build:crazygames && npm run zip   # stick-duel-crazygames.zip
 ```
+
+Difficulty is tuned with an automated playtest (no build needed):
+
+- `node scripts/playtest/run.mjs` — a headless bot plays every level of every world and Endless with
+  beginner / average / good profiles, aiming only from what a player sees (the dotted no-wind preview,
+  the wind arrow, the scenery, its previous miss). Writes `docs/playtest.md` (win rate, turns, duel
+  length, shots blocked near the player, AI damage per turn). The knobs live in `TUNING` in
+  `src/game/levels.ts`; `--tune '{"skill":[0.3,0.9]}'` tries values without editing code, and
+  `--worlds 1 --levels 1,2,3 --runs 6` runs a quick subset.
 
 Tooling scripts (need a build first):
 

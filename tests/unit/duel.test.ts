@@ -54,3 +54,36 @@ describe('duel', () => {
     }
   }
 });
+
+describe('gentle first levels', () => {
+  it('the AI misses its first shot and never headshots on levels 1-1 to 1-3', { timeout: 60_000 }, () => {
+    for (const lvl of [1, 2, 3]) {
+      for (let seed = 1; seed <= 6; seed++) {
+        const L = generateLevel(1, lvl);
+        const duel = new Duel(L, { mode: 'adventure', left: { ...hero(false), hp: 999 }, right: { ...hero(true), look: 'ranger', hp: 999 }, seed });
+        const hits: DuelEvent[] = [];
+        let aiShots = 0;
+        let firstHit = false;
+        duel.on((e) => {
+          if (e.type === 'fire' && e.side === 1) aiShots++;
+          if (e.type === 'hit' && e.side === 0) {
+            hits.push(e);
+            if (aiShots === 1) firstHit = true;
+          }
+        });
+        duel.start();
+        // the player fires harmless shots straight up so the AI keeps getting turns
+        for (let t = 0; t < 90 && aiShots < 6; t += 1 / 60) {
+          if (duel.humanAiming) {
+            duel.setAim(-Math.PI / 2 + 0.3, 0.1);
+            duel.fire();
+          }
+          duel.update(1 / 60);
+        }
+        expect(aiShots).toBeGreaterThanOrEqual(3);
+        expect(firstHit, `1-${lvl} seed ${seed}`).toBe(false);
+        expect(hits.filter((e) => e.type === 'hit' && e.zone === 'head')).toEqual([]);
+      }
+    }
+  });
+});

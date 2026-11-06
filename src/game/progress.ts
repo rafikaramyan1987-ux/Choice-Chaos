@@ -13,6 +13,9 @@ export const COLOR_PRICE: Record<ColorId, number> = { blue: 0, red: 30, green: 3
 
 export type Lang = 'auto' | 'en' | 'fr';
 
+export const TIPS = ['none', 'head', 'wind', 'weapons'] as const;
+export type TipId = (typeof TIPS)[number];
+
 export interface SaveData {
   version: 1;
   coins: number;
@@ -26,7 +29,10 @@ export interface SaveData {
   endlessBest: number;
   /** The last world shown on the map. */
   lastWorld: number;
+  /** First-time tutorial (level 1-1) done or skipped. */
   tutorial: boolean;
+  /** One-time tips already shown. */
+  tips: TipId[];
 }
 
 export function newSave(): SaveData {
@@ -42,6 +48,7 @@ export function newSave(): SaveData {
     endlessBest: 0,
     lastWorld: 1,
     tutorial: false,
+    tips: [],
   };
 }
 
@@ -92,6 +99,7 @@ export function sanitize(raw: unknown): SaveData {
     endlessBest: int(d.endlessBest, 0, 0, 1e6),
     lastWorld: int(d.lastWorld, 1, 1, WORLDS.length),
     tutorial: d.tutorial === true,
+    tips: list(d.tips, TIPS, 'none').filter((x) => x !== 'none'),
   };
 }
 
